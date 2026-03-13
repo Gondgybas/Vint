@@ -27,12 +27,16 @@ SHEET_TYPES = "Типы"
 SHEET_COMPONENTS = "Комплектующие"
 SHEET_LOG = "Лог"
 
-TYPES_COLUMNS = ["id", "название", "описание"]
+TYPES_COLUMNS = ["id", "название", "описание", "параметры"]
 TYPES_HEADERS = {
     "id": "ID",
     "название": "Название типа",
     "описание": "Описание",
+    "параметры": "Параметры",
 }
+
+# Параметры по умолчанию для каждого типа
+DEFAULT_TYPE_PARAMETERS = ["количество", "комментарий"]
 
 STANDARD_COLUMNS = ["id", "тип", "диаметр", "длина", "количество", "вес_единицы"]
 STANDARD_HEADERS = {
@@ -145,7 +149,7 @@ def load_log(file_path: str) -> list:
 
 
 def load_types(file_path: str) -> list:
-    """За��рузить список типов комплектующих из Excel."""
+    """Загрузить список типов комплектующих из Excel."""
     try:
         initialize_db(file_path)
         # Проверяем наличие листа
@@ -156,6 +160,12 @@ def load_types(file_path: str) -> list:
         items = []
         for _, row in df.iterrows():
             item = {col: row[col] for col in TYPES_COLUMNS if col in df.columns}
+            # Параметры хранятся как JSON
+            params_raw = item.get("параметры", "") if "параметры" in df.columns else ""
+            try:
+                item["параметры"] = json.loads(params_raw) if params_raw else DEFAULT_TYPE_PARAMETERS.copy()
+            except Exception:
+                item["параметры"] = DEFAULT_TYPE_PARAMETERS.copy()
             items.append(item)
         return items
     except Exception as e:
@@ -179,8 +189,14 @@ def save_all_with_types(file_path: str, types: list, components: list, log_entri
         if folder and not os.path.exists(folder):
             os.makedirs(folder, exist_ok=True)
 
-        # Типы
-        df_types = pd.DataFrame(types, columns=TYPES_COLUMNS) if types else pd.DataFrame(columns=TYPES_COLUMNS)
+        # Типы (преобразуем параметры в JSON)
+        types_for_save = []
+        for t in types:
+            t_copy = dict(t)
+            t_copy["параметры"] = json.dumps(t.get("параметры", DEFAULT_TYPE_PARAMETERS), ensure_ascii=False)
+            types_for_save.append(t_copy)
+        df_types = pd.DataFrame(types_for_save, columns=TYPES_COLUMNS) if types_for_save else pd.DataFrame(
+            columns=TYPES_COLUMNS)
 
         # Комплектующие
         rows = []
@@ -316,12 +332,14 @@ def diff_items(old: dict, new: dict) -> str:
 class ComponentDialog(tk.Toplevel):
     """Диалоговое окно для создания или редактирования комплектующего."""
 
-    def __init__(self, parent, title: str, item: dict = None):
+    def __init__(self, parent, title: str, item: dict = None, app=None):
         super().__init__(parent)
         self.title(title)
         self.resizable(True, True)
         self.grab_set()
         self.result = None
+
+        self._app = app  # 🆕 Добавь эту строку!
 
         self._item = copy.deepcopy(item) if item else {}
         self._extra_rows = []  # список (key_var, val_var, frame)
@@ -395,7 +413,7 @@ class ComponentDialog(tk.Toplevel):
         ttk.Separator(form, orient="horizontal").grid(row=r, column=0, columnspan=2,
                                                        sticky="ew", padx=5, pady=8)
         r += 1
-        ttk.Label(form, text="Дополнительные параметры:", font=("", 9, "bold")).grid(
+        ttk.Label(form, text="Параметры:", font=("", 9, "bold")).grid(
             row=r, column=0, columnspan=2, sticky="w", padx=5)
         r += 1
 
@@ -403,10 +421,6 @@ class ComponentDialog(tk.Toplevel):
         self._extra_container.grid(row=r, column=0, columnspan=2, sticky="ew", padx=5)
         self._extra_container.columnconfigure(0, weight=1)
         self._extra_container.columnconfigure(1, weight=1)
-        r += 1
-
-        ttk.Button(form, text="➕ Добавить параметр", command=self._add_extra_row).grid(
-            row=r, column=0, columnspan=2, sticky="w", padx=5, pady=4)
         r += 1
 
         # Кнопки OK / Отмена
@@ -444,8 +458,24 @@ class ComponentDialog(tk.Toplevel):
         self._len_var.set(item.get("длина", ""))
         self._qty_var.set(item.get("количество", ""))
         self._weight_var.set(item.get("вес_единицы", ""))
+
+        # 🆕 ДОБАВЛЯЕМ ДИНАМИЧЕСКИЕ ПАРАМЕТРЫ ИЗ ТИПА
+        # Получаем параметры из выбранного типа
+        type_name = item.get("тип", "")
+        if type_name and hasattr(self, '_app'):
+            type_item = next((t for t in self._app.component_types if t.get("название") == type_name), None)
+            if type_item:
+                type_params = type_item.get("параметры", [])
+                for param_name in type_params:
+                    param_value = item.get("доп_параметры", {}).get(param_name, "")
+                    self._add_extra_row(param_name, param_value)
+
+        # Остальные параметры (старые данные доп_параметры)
         for k, v in (item.get("доп_параметры") or {}).items():
-            self._add_extra_row(k, v)
+            # Пропускаем если уже добавили из типа
+            existing = [pv for pv, _, _ in self._extra_rows]
+            if k not in existing:
+                self._add_extra_row(k, v)
 
     # ── валидация и сохранение ─────────────────────────────
 
@@ -495,51 +525,127 @@ class ComponentDialog(tk.Toplevel):
         except ValueError:
             return False
 
+
 class ComponentTypeDialog(tk.Toplevel):
     """Диалоговое окно для создания или редактирования типа комплектующего."""
 
     def __init__(self, parent, title: str, item: dict = None):
         super().__init__(parent)
         self.title(title)
-        self.resizable(False, False)
+        self.resizable(True, True)
         self.grab_set()
         self.result = None
+        self._app = app  # 🆕 Сохраняем ссылку на приложение
 
         self._item = copy.deepcopy(item) if item else {}
+        self._param_rows = []  # список (param_var, frame)
         self._build_ui()
         self._populate(self._item)
 
         self.update_idletasks()
-        w, h = 400, 200
+        w, h = 500, 450
         x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
         self.geometry(f"{w}x{h}+{x}+{y}")
+        self.minsize(400, 350)
 
     def _build_ui(self):
-        frame = ttk.Frame(self, padding=12)
-        frame.pack(fill="both", expand=True)
+        outer = ttk.Frame(self, padding=10)
+        outer.pack(fill="both", expand=True)
 
-        ttk.Label(frame, text="Название *").grid(row=0, column=0, sticky="w", padx=5, pady=4)
+        # Прокручиваемая область
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        self._scroll_frame = ttk.Frame(canvas)
+        self._canvas_window = canvas.create_window((0, 0), window=self._scroll_frame, anchor="nw")
+
+        self._scroll_frame.bind("<Configure>", lambda e: canvas.configure(
+            scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(
+            self._canvas_window, width=e.width))
+        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+
+        form = self._scroll_frame
+        r = 0
+
+        # Название
+        ttk.Label(form, text="Название *").grid(row=r, column=0, sticky="w", padx=5, pady=4)
         self._name_var = tk.StringVar()
-        ttk.Entry(frame, textvariable=self._name_var, width=40).grid(row=0, column=1, sticky="ew", padx=5, pady=4)
+        ttk.Entry(form, textvariable=self._name_var, width=40).grid(row=r, column=1, sticky="ew", padx=5, pady=4)
+        r += 1
 
-        ttk.Label(frame, text="Описание").grid(row=1, column=0, sticky="nw", padx=5, pady=4)
-        self._desc_var = tk.StringVar()
-        desc_text = tk.Text(frame, height=4, width=40)
-        desc_text.grid(row=1, column=1, sticky="ew", padx=5, pady=4)
-        self._desc_text = desc_text
+        # Описание
+        ttk.Label(form, text="Описание").grid(row=r, column=0, sticky="nw", padx=5, pady=4)
+        self._desc_text = tk.Text(form, height=3, width=40)
+        self._desc_text.grid(row=r, column=1, sticky="ew", padx=5, pady=4)
+        r += 1
 
-        frame.columnconfigure(1, weight=1)
+        form.columnconfigure(1, weight=1)
 
-        # Кнопки
+        # Разделитель
+        ttk.Separator(form, orient="horizontal").grid(row=r, column=0, columnspan=2,
+                                                      sticky="ew", padx=5, pady=8)
+        r += 1
+
+        # Параметры
+        ttk.Label(form, text="Параметры типа:", font=("", 9, "bold")).grid(
+            row=r, column=0, columnspan=2, sticky="w", padx=5)
+        r += 1
+
+        self._params_container = ttk.Frame(form)
+        self._params_container.grid(row=r, column=0, columnspan=2, sticky="ew", padx=5)
+        self._params_container.columnconfigure(0, weight=1)
+        r += 1
+
+        ttk.Button(form, text="➕ Добавить параметр", command=self._add_param_row).grid(
+            row=r, column=0, columnspan=2, sticky="w", padx=5, pady=4)
+        r += 1
+
+        ttk.Label(form, text="⚠️ Параметры нельзя будет менять после создания типа!",
+                  font=("", 8), foreground="red").grid(row=r, column=0, columnspan=2, sticky="w", padx=5, pady=2)
+        r += 1
+
+        # Кнопки OK / Отмена
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill="x", side="bottom", padx=10, pady=8)
         ttk.Button(btn_frame, text="Сохранить", command=self._on_ok, width=14).pack(side="right", padx=4)
         ttk.Button(btn_frame, text="Отмена", command=self.destroy, width=10).pack(side="right", padx=4)
 
+    def _add_param_row(self, param_name: str = ""):
+        row_frame = ttk.Frame(self._params_container)
+        idx = len(self._param_rows)
+        row_frame.grid(row=idx, column=0, sticky="ew", pady=2)
+        row_frame.columnconfigure(0, weight=1)
+
+        param_var = tk.StringVar(value=param_name)
+        ttk.Entry(row_frame, textvariable=param_var, width=30).grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        ttk.Button(row_frame, text="✕", width=3,
+                   command=lambda f=row_frame, pv=param_var: self._remove_param_row(f, pv)).grid(row=0, column=1)
+
+        self._param_rows.append((param_var, row_frame))
+
+    def _remove_param_row(self, frame, param_var):
+        self._param_rows = [(pv, f) for pv, f in self._param_rows if pv is not param_var]
+        frame.destroy()
+
     def _populate(self, item: dict):
         self._name_var.set(item.get("название", ""))
         self._desc_text.insert("1.0", item.get("описание", ""))
+
+        # Параметры (если редактируем - показываем что есть, если создаём - добавляем стандартные)
+        params = item.get("параметры", DEFAULT_TYPE_PARAMETERS)
+        for param in params:
+            self._add_param_row(param)
+
+        # Если новый тип - добавляем стандартные параметры
+        if not item.get("id"):
+            if not self._param_rows:
+                for param in DEFAULT_TYPE_PARAMETERS:
+                    self._add_param_row(param)
 
     def _on_ok(self):
         название = self._name_var.get().strip()
@@ -549,10 +655,22 @@ class ComponentTypeDialog(tk.Toplevel):
 
         описание = self._desc_text.get("1.0", "end").strip()
 
+        # Собираем параметры
+        параметры = []
+        for param_var, _ in self._param_rows:
+            p = param_var.get().strip()
+            if p:
+                параметры.append(p)
+
+        if not параметры:
+            messagebox.showwarning("Внимание", "Добавьте хотя бы один параметр.", parent=self)
+            return
+
         self.result = {
             "id": self._item.get("id", ""),
             "название": название,
             "описание": описание,
+            "параметры": параметры,
         }
         self.destroy()
 
@@ -1245,8 +1363,13 @@ class ComponentDetailsTab(ttk.Frame):
             fill="x", padx=6, pady=(0, 4))
 
     def _setup_columns(self, extra_keys: list[str]):
-        """Настроить столбцы таблицы с учётом доп. параметров."""
-        cols = list(STANDARD_COLUMNS) + extra_keys
+        """Настроить столбцы таблицы с учётом доп. параметров типа."""
+        # 🆕 Используем параметры из типа
+        type_params = []
+        if hasattr(self.app, 'selected_type') and self.app.selected_type:
+            type_params = self.app.selected_type.get("параметры", [])
+
+        cols = list(STANDARD_COLUMNS) + type_params
         self.tree.configure(columns=cols)
         for c in cols:
             header = STANDARD_HEADERS.get(c, c)
@@ -1261,14 +1384,10 @@ class ComponentDetailsTab(ttk.Frame):
             print(f"🔧 Filter already exists, keeping filters: {self._filter.active_filters}")
 
     def _collect_extra_keys(self) -> list[str]:
-        keys = []
-        seen = set()
-        for item in self.app.components:
-            for k in (item.get("доп_параметры") or {}):
-                if k not in seen:
-                    seen.add(k)
-                    keys.append(k)
-        return keys
+        """Получить параметры из выбранного типа."""
+        if hasattr(self.app, 'selected_type') and self.app.selected_type:
+            return self.app.selected_type.get("параметры", [])
+        return []
 
     def refresh(self):
         """Перерисовать таблицу деталей типа."""
@@ -1338,7 +1457,7 @@ class ComponentDetailsTab(ttk.Frame):
             messagebox.showinfo("Внимание", "Выберите тип комплектующего сначала.")
             return
 
-        dlg = ComponentDialog(self.winfo_toplevel(), "Добавить комплектующее")
+        dlg = ComponentDialog(self.winfo_toplevel(), "Добавить комплектующее", app=self.app)  # 🆕 app=self.app
         self.wait_window(dlg)
         if dlg.result is None:
             return
@@ -1366,7 +1485,7 @@ class ComponentDetailsTab(ttk.Frame):
             return
 
         old_item = copy.deepcopy(item)
-        dlg = ComponentDialog(self.winfo_toplevel(), "Редактировать комплектующее", item)
+        dlg = ComponentDialog(self.winfo_toplevel(), "Редактировать комплектующее", item, app=self.app)  # 🆕 app=self.app
         self.wait_window(dlg)
         if dlg.result is None:
             return
