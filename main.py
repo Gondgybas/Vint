@@ -401,23 +401,16 @@ class ComponentDialog(tk.Toplevel):
         ttk.Entry(form, textvariable=self._len_var, width=30).grid(row=r, column=1, sticky="ew", padx=5, pady=4)
         r += 1
 
-        ttk.Label(form, text="Количество *").grid(row=r, column=0, sticky="w", padx=5, pady=4)
-        self._qty_var = tk.StringVar()
-        ttk.Entry(form, textvariable=self._qty_var, width=30).grid(row=r, column=1, sticky="ew", padx=5, pady=4)
-        r += 1
-
-        ttk.Label(form, text="Вес/ед. (кг)").grid(row=r, column=0, sticky="w", padx=5, pady=4)
-        self._weight_var = tk.StringVar()
-        ttk.Entry(form, textvariable=self._weight_var, width=30).grid(row=r, column=1, sticky="ew", padx=5, pady=4)
-        r += 1
+        # 🆕 НЕ ПОКАЗЫВАЕМ стандартные поля Количество и Вес/ед.
+        # Они будут в параметрах типа!
 
         form.columnconfigure(1, weight=1)
 
-        # Разделитель для доп. параметров
+        # Разделитель для параметров
         ttk.Separator(form, orient="horizontal").grid(row=r, column=0, columnspan=2,
-                                                       sticky="ew", padx=5, pady=8)
+                                                      sticky="ew", padx=5, pady=8)
         r += 1
-        ttk.Label(form, text="Параметры:", font=("", 9, "bold")).grid(
+        ttk.Label(form, text="Параметры типа:", font=("", 9, "bold")).grid(
             row=r, column=0, columnspan=2, sticky="w", padx=5)
         r += 1
 
@@ -457,7 +450,7 @@ class ComponentDialog(tk.Toplevel):
     # ── заполнение данными ─────────────────────────────────
 
     def _populate(self, item: dict):
-        # 🆕 НАЗВАНИЕ ТИПА (вместо старого "тип")
+        # Название типа
         self._type_name_var.set(item.get("тип", ""))
 
         self._diam_var.set(item.get("диаметр", ""))
@@ -465,62 +458,32 @@ class ComponentDialog(tk.Toplevel):
         self._qty_var.set(item.get("количество", ""))
         self._weight_var.set(item.get("вес_единицы", ""))
 
-        # ДОБАВЛЯЕМ ДИНАМИЧЕСКИЕ ПАРАМЕТРЫ ИЗ ТИПА
-        # Получаем параметры из выбранного типа
+        # 🆕 ДОБАВЛЯЕМ ТОЛЬКО ПАРАМЕТРЫ ИЗ ВЫБРАННОГО ТИПА
         type_name = item.get("тип", "")
         if type_name and self._app and hasattr(self._app, 'component_types'):
             type_item = next((t for t in self._app.component_types if t.get("название") == type_name), None)
             if type_item:
+                # Берём параметры ТОЛЬКО из типа
                 type_params = type_item.get("параметры", [])
                 for param_name in type_params:
                     param_value = item.get("доп_параметры", {}).get(param_name, "")
                     self._add_extra_row(param_name, param_value)
-
-        # Остальные параметры (старые данные доп_параметры)
-        for k, v in (item.get("доп_параметры") or {}).items():
-            # Пропускаем если уже добавили из типа
-            existing = [k_var.get() for k_var, _, _ in self._extra_rows]
-            if k not in existing:
-                self._add_extra_row(k, v)
+        elif not item.get("id"):  # 🆕 Если создаём НОВОЕ комплектующее
+            # Берём параметры из ВЫБРАННОГО типа в выпадающем списке
+            type_name = self._type_name_var.get().strip()
+            if type_name and self._app and hasattr(self._app, 'component_types'):
+                type_item = next((t for t in self._app.component_types if t.get("название") == type_name), None)
+                if type_item:
+                    type_params = type_item.get("параметры", [])
+                    for param_name in type_params:
+                        self._add_extra_row(param_name, "")
 
     def _on_ok(self):
-        # 🆕 НАЗВАНИЕ ТИПА
+        # Название типа
         тип = self._type_name_var.get().strip()
         if not тип:
             messagebox.showwarning("Внимание", "Поле «Тип» обязательно для заполнения.", parent=self)
             return
-
-        # Валидация числовых полей
-        qty_str = self._qty_var.get().strip()
-        if qty_str and not self._is_number(qty_str):
-            messagebox.showwarning("Внимание", "Количество должно быть числом.", parent=self)
-            return
-        weight_str = self._weight_var.get().strip()
-        if weight_str and not self._is_number(weight_str):
-            messagebox.showwarning("Внимание", "Вес/ед. должен быть числом.", parent=self)
-            return
-        len_str = self._len_var.get().strip()
-        if len_str and not self._is_number(len_str):
-            messagebox.showwarning("Внимание", "Длина должна быть числом.", parent=self)
-            return
-
-        extra = {}
-        for key_var, val_var, _ in self._extra_rows:
-            k = key_var.get().strip()
-            v = val_var.get().strip()
-            if k:
-                extra[k] = v
-
-        self.result = {
-            "id": self._item.get("id", ""),
-            "тип": тип,  # 🆕 Используем название типа
-            "диаметр": self._diam_var.get().strip(),
-            "длина": len_str,
-            "количество": qty_str,
-            "вес_единицы": weight_str,
-            "доп_параметры": extra,
-        }
-        self.destroy()
 
     @staticmethod
     def _is_number(s: str) -> bool:
@@ -673,9 +636,12 @@ class ComponentTypeDialog(tk.Toplevel):
 
         self.result = {
             "id": self._item.get("id", ""),
-            "название": название,
-            "описание": описание,
-            "параметры": параметры,
+            "тип": тип,
+            "диаметр": self._diam_var.get().strip(),
+            "длина": len_str,
+            "количество": "",  # 🆕 Пусто, будет в параметрах
+            "вес_единицы": "",  # 🆕 Пусто, будет в параметрах
+            "доп_параметры": extra,
         }
         self.destroy()
 
