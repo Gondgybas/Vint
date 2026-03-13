@@ -450,40 +450,58 @@ class ComponentDialog(tk.Toplevel):
     # ── заполнение данными ─────────────────────────────────
 
     def _populate(self, item: dict):
-        # Название типа
-        self._type_name_var.set(item.get("тип", ""))
+        # 🆕 Устанавливаем только название типа (если редактируем)
+        if item.get("id"):  # Если редактируем существующее
+            self._type_name_var.set(item.get("тип", ""))
 
-        self._diam_var.set(item.get("диаметр", ""))
-        self._len_var.set(item.get("длина", ""))
-        self._qty_var.set(item.get("количество", ""))
-        self._weight_var.set(item.get("вес_единицы", ""))
+            self._diam_var.set(item.get("диаметр", ""))
+            self._len_var.set(item.get("длина", ""))
 
-        # 🆕 ДОБАВЛЯЕМ ТОЛЬКО ПАРАМЕТРЫ ИЗ ВЫБРАННОГО ТИПА
-        type_name = item.get("тип", "")
-        if type_name and self._app and hasattr(self._app, 'component_types'):
-            type_item = next((t for t in self._app.component_types if t.get("название") == type_name), None)
-            if type_item:
-                # Берём параметры ТОЛЬКО из типа
-                type_params = type_item.get("параметры", [])
-                for param_name in type_params:
-                    param_value = item.get("доп_параметры", {}).get(param_name, "")
-                    self._add_extra_row(param_name, param_value)
-        elif not item.get("id"):  # 🆕 Если создаём НОВОЕ комплектующее
-            # Берём параметры из ВЫБРАННОГО типа в выпадающем списке
-            type_name = self._type_name_var.get().strip()
+            # ДОБАВЛЯЕМ ПАРАМЕТРЫ ИЗ ТИПА
+            type_name = item.get("тип", "")
             if type_name and self._app and hasattr(self._app, 'component_types'):
                 type_item = next((t for t in self._app.component_types if t.get("название") == type_name), None)
                 if type_item:
                     type_params = type_item.get("параметры", [])
                     for param_name in type_params:
-                        self._add_extra_row(param_name, "")
+                        param_value = item.get("доп_параметры", {}).get(param_name, "")
+                        self._add_extra_row(param_name, param_value)
+        else:  # 🆕 Если создаём новое комплектующее
+            # При создании параметры добавляются только если тип выбран
+            pass
 
     def _on_ok(self):
-        # Название типа
-        тип = self._type_name_var.get().strip()
-        if not тип:
+        # Получаем название типа из combobox
+        selected_type = self._type_name_var.get().strip()
+        if not selected_type:
             messagebox.showwarning("Внимание", "Поле «Тип» обязательно для заполнения.", parent=self)
             return
+
+        # Валидация длины
+        length_value = self._len_var.get().strip()
+        if length_value and not self._is_number(length_value):
+            messagebox.showwarning("Внимание", "Длина должна быть числом.", parent=self)
+            return
+
+        # Собираем параметры
+        params = {}
+        for key_var, val_var, _ in self._extra_rows:
+            param_key = key_var.get().strip()
+            param_val = val_var.get().strip()
+            if param_key:
+                params[param_key] = param_val
+
+        # Результат
+        self.result = {
+            "id": self._item.get("id", ""),
+            "тип": selected_type,
+            "диаметр": self._diam_var.get().strip(),
+            "длина": length_value,
+            "количество": "",
+            "вес_единицы": "",
+            "доп_параметры": params,
+        }
+        self.destroy()
 
     @staticmethod
     def _is_number(s: str) -> bool:
@@ -636,12 +654,9 @@ class ComponentTypeDialog(tk.Toplevel):
 
         self.result = {
             "id": self._item.get("id", ""),
-            "тип": тип,
-            "диаметр": self._diam_var.get().strip(),
-            "длина": len_str,
-            "количество": "",  # 🆕 Пусто, будет в параметрах
-            "вес_единицы": "",  # 🆕 Пусто, будет в параметрах
-            "доп_параметры": extra,
+            "название": название,
+            "описание": описание,
+            "параметры": параметры,
         }
         self.destroy()
 
