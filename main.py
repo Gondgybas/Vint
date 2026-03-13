@@ -36,7 +36,7 @@ TYPES_HEADERS = {
 }
 
 # Параметры по умолчанию для каждого типа
-DEFAULT_TYPE_PARAMETERS = ["Количество", "Комментарий"]
+DEFAULT_TYPE_PARAMETERS = []
 
 STANDARD_COLUMNS = ["id", "тип", "количество", "комментарий"]
 STANDARD_HEADERS = {
@@ -342,8 +342,8 @@ class ComponentDialog(tk.Toplevel):
         self._item = copy.deepcopy(item) if item else {}
         self._extra_rows = []
 
-        self._build_ui()
-        self._populate(self._item)
+        self._build_ui()  # 🆕 СНАЧАЛА строим UI
+        self._populate(self._item)  # 🆕 ПОТОМ заполняем данные
 
         self.update_idletasks()
         w, h = 480, 520
@@ -392,7 +392,7 @@ class ComponentDialog(tk.Toplevel):
         form = self._scroll_frame
         r = 0
 
-        # ПАРАМЕТР ТИП - ЕДИНСТВЕННОЕ ПОЛЕ!
+        # ПОЛЕ: ТИП
         ttk.Label(form, text="Тип *").grid(row=r, column=0, sticky="w", padx=5, pady=4)
         self._type_name_var = tk.StringVar()
         type_names = []
@@ -405,10 +405,12 @@ class ComponentDialog(tk.Toplevel):
 
         form.columnconfigure(1, weight=1)
 
-        # Разделитель для параметров
+        # РАЗДЕЛИТЕЛЬ
         ttk.Separator(form, orient="horizontal").grid(row=r, column=0, columnspan=2,
                                                       sticky="ew", padx=5, pady=8)
         r += 1
+
+        # ПАРАМЕТРЫ ТИПА
         ttk.Label(form, text="Параметры типа:", font=("", 9, "bold")).grid(
             row=r, column=0, columnspan=2, sticky="w", padx=5)
         r += 1
@@ -419,7 +421,32 @@ class ComponentDialog(tk.Toplevel):
         self._extra_container.columnconfigure(1, weight=1)
         r += 1
 
-        # Кнопки OK / Отмена
+        # РАЗДЕЛИТЕЛЬ
+        ttk.Separator(form, orient="horizontal").grid(row=r, column=0, columnspan=2,
+                                                      sticky="ew", padx=5, pady=8)
+        r += 1
+
+        # ПОЛЕ: КОЛИЧЕСТВО
+        ttk.Label(form, text="Количество:", font=("", 9, "bold")).grid(
+            row=r, column=0, columnspan=2, sticky="w", padx=5)
+        r += 1
+
+        self._qty_var = tk.StringVar()
+        ttk.Entry(form, textvariable=self._qty_var, width=30).grid(row=r, column=0, columnspan=2, sticky="ew", padx=5,
+                                                                   pady=4)
+        r += 1
+
+        # ПОЛЕ: КОММЕНТАРИЙ
+        ttk.Label(form, text="Комментарий:", font=("", 9, "bold")).grid(
+            row=r, column=0, columnspan=2, sticky="w", padx=5)
+        r += 1
+
+        self._comment_var = tk.StringVar()
+        ttk.Entry(form, textvariable=self._comment_var, width=30).grid(row=r, column=0, columnspan=2, sticky="ew",
+                                                                       padx=5, pady=4)
+        r += 1
+
+        # КНОПКИ
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill="x", side="bottom", padx=10, pady=8)
         ttk.Button(btn_frame, text="Сохранить", command=self._on_ok, width=14).pack(side="right", padx=4)
@@ -449,7 +476,17 @@ class ComponentDialog(tk.Toplevel):
 
     def _populate(self, item: dict):
         # Устанавливаем тип (если редактируем)
-        self._type_name_var.set(item.get("тип", ""))
+        if hasattr(self, '_type_name_var'):
+            self._type_name_var.set(item.get("тип", ""))
+
+        # 🆕 Заполняем Количество и Комментарий (если поля существуют)
+        if hasattr(self, '_qty_var'):
+            extra_params = item.get("доп_параметры", {})
+            self._qty_var.set(extra_params.get("Количество", ""))
+
+        if hasattr(self, '_comment_var'):
+            extra_params = item.get("доп_параметры", {})
+            self._comment_var.set(extra_params.get("Комментарий", ""))
 
         # Загружаем параметры из существующего комплектующего
         if item.get("id"):  # Если редактируем
@@ -476,12 +513,16 @@ class ComponentDialog(tk.Toplevel):
             if param_key:
                 params[param_key] = param_val
 
+        # 🆕 Добавляем Количество и Комментарий в параметры
+        params["Количество"] = self._qty_var.get().strip()
+        params["Комментарий"] = self._comment_var.get().strip()
+
         self.result = {
             "id": self._item.get("id", ""),
             "тип": selected_type,
             "диаметр": "",
             "длина": "",
-            "количество": params.get("Количество", ""),  # 🆕 Из параметров типа
+            "количество": "",
             "вес_единицы": "",
             "доп_параметры": params,
         }
@@ -578,7 +619,7 @@ class ComponentTypeDialog(tk.Toplevel):
 
         # Разделитель
         ttk.Separator(form, orient="horizontal").grid(row=r, column=0, columnspan=2,
-                                                      sticky="ew", padx=5, pady=8)
+                                                       sticky="ew", padx=5, pady=8)
         r += 1
 
         # Параметры
@@ -591,7 +632,7 @@ class ComponentTypeDialog(tk.Toplevel):
         self._params_container.columnconfigure(0, weight=1)
         r += 1
 
-        ttk.Button(form, text="➕ Добавить параметр", command=self._add_param_row).grid(
+        ttk.Button(form, text="➕ ��обавить параметр", command=self._add_param_row).grid(
             row=r, column=0, columnspan=2, sticky="w", padx=5, pady=4)
         r += 1
 
@@ -626,16 +667,15 @@ class ComponentTypeDialog(tk.Toplevel):
         self._name_var.set(item.get("название", ""))
         self._desc_text.insert("1.0", item.get("описание", ""))
 
-        # Параметры (если редактируем - показываем что есть, если создаём - добавляем стандартные)
-        params = item.get("параметры", DEFAULT_TYPE_PARAMETERS)
+        # Параметры (если редактируем - показываем что есть)
+        params = item.get("параметры", [])
         for param in params:
             self._add_param_row(param)
 
-        # Если новый тип - добавляем стандартные параметры
+        # 🆕 Если новый тип - добавляем ОДНУ ПУСТУЮ строку
         if not item.get("id"):
             if not self._param_rows:
-                for param in DEFAULT_TYPE_PARAMETERS:
-                    self._add_param_row(param)
+                self._add_param_row("")
 
     def _on_ok(self):
         название = self._name_var.get().strip()
