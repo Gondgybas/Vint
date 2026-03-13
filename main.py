@@ -343,6 +343,11 @@ class ComponentDialog(tk.Toplevel):
         self._extra_rows = []
 
         self._build_ui()  # 🆕 СНАЧАЛА строим UI
+
+        # 🆕 Если добавляем - загружаем параметры типа
+        if not self._item.get("id"):
+            self._on_type_selected()
+
         self._populate(self._item)  # 🆕 ПОТОМ заполняем данные
 
         self.update_idletasks()
@@ -353,20 +358,21 @@ class ComponentDialog(tk.Toplevel):
         self.minsize(400, 400)
 
     def _on_type_selected(self, event=None):
-        """При выборе типа загружаем его параметры"""
+        """Загрузить параметры выбранного типа."""
         type_name = self._type_name_var.get().strip()
-        if not type_name or not self._app:
+        if not type_name or not self._app or not hasattr(self._app, 'component_types'):
             return
 
-        # Очищаем старые параметры
-        for _, _, frame in self._extra_rows:
-            frame.destroy()
-        self._extra_rows = []
-
-        # Находим тип и добавляем его параметры
         type_item = next((t for t in self._app.component_types if t.get("название") == type_name), None)
-        if type_item:
-            type_params = type_item.get("параметры", [])
+        if not type_item:
+            return
+
+        type_params = type_item.get("параметры", [])
+
+        # 🆕 НЕ очищаем строки при редактировании!
+        # Проверяем есть ли уже строки (редактирование) или их нет (добавление)
+        if not self._extra_rows:
+            # Добавление - создаём пустые строки
             for param_name in type_params:
                 self._add_extra_row(param_name, "")
 
@@ -462,10 +468,10 @@ class ComponentDialog(tk.Toplevel):
         key_var = tk.StringVar(value=key)
         val_var = tk.StringVar(value=value)
 
-        # 🆕 Название параметра (только для отображения)
+        # 🆕 Название параметра (только для отображения, readonly)
         ttk.Label(row_frame, text=key, font=("", 9, "bold")).grid(row=0, column=0, sticky="w", padx=5)
 
-        # 🆕 Поле для ВВОДА значения
+        # 🆕 Поле для ВВОДА значения (заполнено текущим значением)
         ttk.Entry(row_frame, textvariable=val_var, width=30).grid(row=0, column=1, sticky="ew", padx=5)
 
         self._extra_rows.append((key_var, val_var, row_frame))
@@ -475,6 +481,10 @@ class ComponentDialog(tk.Toplevel):
         frame.destroy()
 
     def _populate(self, item: dict):
+        print(f"\n🔍 DEBUG _populate:")
+        print(f"  item: {item}")
+        print(f"  item.get('id'): {item.get('id')}")
+
         # Устанавливаем тип (если редактируем)
         if hasattr(self, '_type_name_var'):
             self._type_name_var.set(item.get("тип", ""))
@@ -483,20 +493,26 @@ class ComponentDialog(tk.Toplevel):
         if hasattr(self, '_qty_var'):
             extra_params = item.get("доп_параметры", {})
             self._qty_var.set(extra_params.get("Количество", ""))
+            print(f"  Количество: {extra_params.get('Количество', '')}")
 
         if hasattr(self, '_comment_var'):
             extra_params = item.get("доп_параметры", {})
             self._comment_var.set(extra_params.get("Комментарий", ""))
+            print(f"  Комментарий: {extra_params.get('Комментарий', '')}")
 
         # Загружаем параметры из существующего комплектующего
         if item.get("id"):  # Если редактируем
             type_name = item.get("тип", "")
+            print(f"  type_name: {type_name}")
             if type_name and self._app and hasattr(self._app, 'component_types'):
                 type_item = next((t for t in self._app.component_types if t.get("название") == type_name), None)
                 if type_item:
                     type_params = type_item.get("параметры", [])
+                    print(f"  type_params: {type_params}")
+                    # 🆕 Загружаем параметры с их текущими значениями
                     for param_name in type_params:
                         param_value = item.get("доп_параметры", {}).get(param_name, "")
+                        print(f"    {param_name}: {param_value}")
                         self._add_extra_row(param_name, param_value)
 
     def _on_ok(self):
@@ -1543,6 +1559,13 @@ class ComponentDetailsTab(ttk.Frame):
         item = next((c for c in self.app.components if str(c.get("id")) == item_id), None)
         if item is None:
             return
+
+        # 🆕 ОТЛАДКА
+        print(f"\n🔍 DEBUG edit_item:")
+        print(f"  item_id: {item_id}")
+        print(f"  item: {item}")
+        print(f"  тип: {item.get('тип', '')}")
+        print(f"  доп_параметры: {item.get('доп_параметры', {})}")
 
         old_item = copy.deepcopy(item)
         dlg = ComponentDialog(self.winfo_toplevel(), "Редактировать комплектующее", item, app=self.app)
