@@ -36,7 +36,7 @@ TYPES_HEADERS = {
 }
 
 # Параметры по умолчанию для каждого типа
-DEFAULT_TYPE_PARAMETERS = ["количество", "комментарий"]
+DEFAULT_TYPE_PARAMETERS = ["Количество", "Комментарий"]
 
 STANDARD_COLUMNS = ["id", "тип", "диаметр", "длина", "количество", "вес_единицы"]
 STANDARD_HEADERS = {
@@ -339,13 +339,12 @@ class ComponentDialog(tk.Toplevel):
         self.grab_set()
         self.result = None
 
-        self._app = app  # 🆕 Добавь эту строку!
-
+        self._app = app
         self._item = copy.deepcopy(item) if item else {}
-        self._extra_rows = []  # список (key_var, val_var, frame)
+        self._extra_rows = []
 
-        self._build_ui()
-        self._populate(self._item)
+        self._build_ui()  # ← это строка
+        self._populate(self._item)  # ← это строка
 
         self.update_idletasks()
         w, h = 480, 520
@@ -380,11 +379,13 @@ class ComponentDialog(tk.Toplevel):
         r = 0
 
         # Стандартные поля
-        ttk.Label(form, text="Тип *").grid(row=r, column=0, sticky="w", padx=5, pady=4)
-        self._type_var = tk.StringVar()
-        cb_type = ttk.Combobox(form, textvariable=self._type_var, values=COMPONENT_TYPES, width=28)
-        cb_type.grid(row=r, column=1, sticky="ew", padx=5, pady=4)
-        r += 1
+        # 🆕 ПАРАМЕТР ТИП
+        # Получаем список названий типов из app
+        type_names = []
+        if self._app and hasattr(self._app, 'component_types'):
+            type_names = [t.get("название", "") for t in self._app.component_types]
+
+        # Стандартные параметры
 
         ttk.Label(form, text="Диаметр").grid(row=r, column=0, sticky="w", padx=5, pady=4)
         self._diam_var = tk.StringVar()
@@ -453,16 +454,18 @@ class ComponentDialog(tk.Toplevel):
     # ── заполнение данными ─────────────────────────────────
 
     def _populate(self, item: dict):
-        self._type_var.set(item.get("тип", ""))
+        # 🆕 НАЗВАНИЕ ТИПА (вместо старого "тип")
+        self._type_name_var.set(item.get("тип", ""))
+
         self._diam_var.set(item.get("диаметр", ""))
         self._len_var.set(item.get("длина", ""))
         self._qty_var.set(item.get("количество", ""))
         self._weight_var.set(item.get("вес_единицы", ""))
 
-        # 🆕 ДОБАВЛЯЕМ ДИНАМИЧЕСКИЕ ПАРАМЕТРЫ ИЗ ТИПА
+        # ДОБАВЛЯЕМ ДИНАМИЧЕСКИЕ ПАРАМЕТРЫ ИЗ ТИПА
         # Получаем параметры из выбранного типа
         type_name = item.get("тип", "")
-        if type_name and hasattr(self, '_app'):
+        if type_name and self._app and hasattr(self._app, 'component_types'):
             type_item = next((t for t in self._app.component_types if t.get("название") == type_name), None)
             if type_item:
                 type_params = type_item.get("параметры", [])
@@ -473,14 +476,13 @@ class ComponentDialog(tk.Toplevel):
         # Остальные параметры (старые данные доп_параметры)
         for k, v in (item.get("доп_параметры") or {}).items():
             # Пропускаем если уже добавили из типа
-            existing = [pv for pv, _, _ in self._extra_rows]
+            existing = [k_var.get() for k_var, _, _ in self._extra_rows]
             if k not in existing:
                 self._add_extra_row(k, v)
 
-    # ── валидация и сохранение ─────────────────────────────
-
     def _on_ok(self):
-        тип = self._type_var.get().strip()
+        # 🆕 НАЗВАНИЕ ТИПА
+        тип = self._type_name_var.get().strip()
         if not тип:
             messagebox.showwarning("Внимание", "Поле «Тип» обязательно для заполнения.", parent=self)
             return
@@ -508,7 +510,7 @@ class ComponentDialog(tk.Toplevel):
 
         self.result = {
             "id": self._item.get("id", ""),
-            "тип": тип,
+            "тип": тип,  # 🆕 Используем название типа
             "диаметр": self._diam_var.get().strip(),
             "длина": len_str,
             "количество": qty_str,
