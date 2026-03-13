@@ -88,6 +88,12 @@ def save_settings(settings: dict):
 # ─────────────────────────────────────────────────────────────
 
 def get_db_path(settings: dict) -> str:
+    """Получить путь до Excel файла."""
+    # 🆕 Если указан конкретный файл - используем его
+    if "db_file" in settings and settings["db_file"]:
+        return settings["db_file"]
+
+    # Иначе используем папку + имя файла
     folder = settings.get("db_folder", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(folder, DEFAULT_DB_NAME)
 
@@ -1807,7 +1813,7 @@ class SettingsDialog(tk.Toplevel):
         self._settings = dict(settings)
         self._build_ui()
         self.update_idletasks()
-        w, h = 480, 160
+        w, h = 550, 220
         x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
         self.geometry(f"{w}x{h}+{x}+{y}")
@@ -1816,25 +1822,47 @@ class SettingsDialog(tk.Toplevel):
         frame = ttk.Frame(self, padding=12)
         frame.pack(fill="both", expand=True)
 
-        ttk.Label(frame, text="Папка для Excel-файла:").grid(row=0, column=0, sticky="w", pady=4)
+        # 🆕 Опция 1: Выбрать папку
+        ttk.Label(frame, text="📁 Папка для Excel-файла:", font=("", 10, "bold")).grid(row=0, column=0, sticky="w",
+                                                                                      pady=(4, 2))
         self._path_var = tk.StringVar(
             value=self._settings.get("db_folder",
                                      os.path.dirname(os.path.abspath(__file__))))
-        path_entry = ttk.Entry(frame, textvariable=self._path_var, width=40)
-        path_entry.grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=4)
-        ttk.Button(frame, text="...", width=3, command=self._browse).grid(row=0, column=2, padx=4)
-        frame.columnconfigure(1, weight=1)
+        path_entry = ttk.Entry(frame, textvariable=self._path_var, width=50)
+        path_entry.grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=(4, 2))
+        ttk.Button(frame, text="...", width=3, command=self._browse_folder).grid(row=0, column=2, padx=4)
 
-        ttk.Label(frame, text="Файл будет сохранён как:").grid(row=1, column=0, sticky="w", pady=2)
-        self._file_label = ttk.Label(frame, text=DEFAULT_DB_NAME, foreground="grey")
-        self._file_label.grid(row=1, column=1, columnspan=2, sticky="w", padx=4)
+        # 🆕 Опция 2: Выбрать конкретный файл
+        ttk.Label(frame, text="📄 Или выберите файл напрямую:", font=("", 10, "bold")).grid(row=1, column=0, sticky="w",
+                                                                                           pady=(8, 2))
+        self._file_var = tk.StringVar(
+            value=self._settings.get("db_file", ""))
+        file_entry = ttk.Entry(frame, textvariable=self._file_var, width=50)
+        file_entry.grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=(8, 2))
+        ttk.Button(frame, text="...", width=3, command=self._browse_file).grid(row=1, column=2, padx=4)
 
+        # 🆕 Предпросмотр пути где будет сохранён файл
+        ttk.Label(frame, text="📌 Итоговый путь:", font=("", 10)).grid(row=2, column=0, sticky="w", pady=(8, 2))
+        self._preview_var = tk.StringVar()
+        self._update_preview()
+        preview_label = ttk.Label(frame, textvariable=self._preview_var, foreground="grey", wraplength=400,
+                                  justify="left")
+        preview_label.grid(row=2, column=1, columnspan=2, sticky="w", padx=4)
+
+        # Кнопки
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=2, column=0, columnspan=3, sticky="e", pady=8)
-        ttk.Button(btn_frame, text="Сохранить", command=self._ok).pack(side="right", padx=4)
+        btn_frame.grid(row=3, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        ttk.Button(btn_frame, text="💾 Сохранить", command=self._ok).pack(side="right", padx=4)
         ttk.Button(btn_frame, text="Отмена", command=self.destroy).pack(side="right")
 
-    def _browse(self):
+        frame.columnconfigure(1, weight=1)
+
+        # Слушаем изменения для обновления предпросмотра
+        self._path_var.trace_add("write", lambda *args: self._update_preview())
+        self._file_var.trace_add("write", lambda *args: self._update_preview())
+
+    def _browse_folder(self):
+        """Выбрать папку."""
         folder = filedialog.askdirectory(
             title="Выберите папку для Excel",
             initialdir=self._path_var.get(),
@@ -1842,9 +1870,46 @@ class SettingsDialog(tk.Toplevel):
         )
         if folder:
             self._path_var.set(folder)
+            self._file_var.set("")  # Очищаем выбор файла
+
+    def _browse_file(self):
+        """Выбрать конкретный файл."""
+        file = filedialog.askopenfilename(
+            title="Выберите файл Excel",
+            initialdir=self._path_var.get() if self._path_var.get() else os.path.dirname(os.path.abspath(__file__)),
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
+            parent=self,
+        )
+        if file:
+            self._file_var.set(file)
+            self._path_var.set("")  # Очищаем выбор папки
+
+    def _update_preview(self):
+        """Обновить предпросмотр итогового пути."""
+        if self._file_var.get():
+            # Если выбран файл напрямую
+            preview = f"Файл: {self._file_var.get()}"
+        elif self._path_var.get():
+            # Если выбрана папка
+            preview = f"Папка: {self._path_var.get()}\nФайл: {DEFAULT_DB_NAME}"
+        else:
+            preview = "Не выбрано"
+        self._preview_var.set(preview)
 
     def _ok(self):
-        self._settings["db_folder"] = self._path_var.get()
+        """Сохранить настройки."""
+        if self._file_var.get():
+            # Если выбран файл напрямую
+            self._settings["db_file"] = self._file_var.get()
+            self._settings.pop("db_folder", None)  # Удаляем папку
+        elif self._path_var.get():
+            # Если выбрана папка
+            self._settings["db_folder"] = self._path_var.get()
+            self._settings.pop("db_file", None)  # Удаляем файл
+        else:
+            messagebox.showwarning("Ошибка", "Выберите папку или файл!")
+            return
+
         self.result = self._settings
         self.destroy()
 
@@ -1986,12 +2051,14 @@ class MainApp(tk.Tk):
         initialize_db(new_path)
         # Перезагрузить данные из нового места, если файл там уже есть
         if os.path.exists(new_path) and new_path != old_path:
+            self.component_types = load_types(new_path)
             self.components = load_components(new_path)
             self.log_entries = load_log(new_path)
         else:
             # Сохранить текущие данные в новое место
             self.auto_save()
-        self.tab_components.refresh()
+        self.tab_types.refresh()  # 🆕 Исправлено (было tab_components)
+        self.tab_details.refresh()  # 🆕 Добавлено
         self.tab_log.refresh()
         self._db_path_label.config(text=new_path)
 
