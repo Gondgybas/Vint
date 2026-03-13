@@ -46,12 +46,13 @@ STANDARD_HEADERS = {
     "комментарий": "Комментарий",
 }
 
-LOG_COLUMNS = ["дата_время", "операция", "комплектующее", "изменение", "комментарий"]
+LOG_COLUMNS = ["дата_время", "операция", "комплектующее", "тип_изменения", "кол_во_остаток", "комментарий"]
 LOG_HEADERS = {
-    "дата_время": "Дата и время",
+    "дата_время": "Дата и время",  # 🆕 Исправлено
     "операция": "Операция",
     "комплектующее": "Комплектующее",
-    "изменение": "Изменение",
+    "тип_изменения": "Тип изменения",
+    "кол_во_остаток": "Кол-во / Остаток",
     "комментарий": "Комментарий",
 }
 
@@ -97,18 +98,16 @@ def initialize_db(file_path: str):
         return
     wb = Workbook()
 
-    # Лист типов
     ws_types = wb.active
     ws_types.title = SHEET_TYPES
-    ws_types.append(["id", "название", "описание"])
+    ws_types.append(["id", "название", "описание", "параметры"])
 
-    # Лист комплектующих
     ws_comp = wb.create_sheet(SHEET_COMPONENTS)
     ws_comp.append(["id", "type_id", "тип", "диаметр", "длина", "количество", "вес_единицы", "доп_параметры"])
 
-    # Лист логов
+    # 🆕 Новая структура логов
     ws_log = wb.create_sheet(SHEET_LOG)
-    ws_log.append(["дата_время", "операция", "комплектующее", "изменение", "комментарий"])
+    ws_log.append(["дата_время", "операция", "комплектующее", "тип_изменения", "кол_во_остаток", "комментарий"])
 
     wb.save(file_path)
 
@@ -644,7 +643,7 @@ class ComponentTypeDialog(tk.Toplevel):
         self._params_container.columnconfigure(0, weight=1)
         r += 1
 
-        ttk.Button(form, text="➕ ��обавить параметр", command=self._add_param_row).grid(
+        ttk.Button(form, text="➕ Добавить параметр", command=self._add_param_row).grid(
             row=r, column=0, columnspan=2, sticky="w", padx=5, pady=4)
         r += 1
 
@@ -1632,13 +1631,19 @@ class LogTab(ttk.Frame):
     def __init__(self, master, app):
         super().__init__(master)
         self.app = app
+        self._filter = None
+        self._sort_col = "дата_время"  # 🆕 Исправлено
+        self._sort_asc = False
+        self._status_var = tk.StringVar()
         self._build_ui()
+        self._auto_refresh_id = None
+        self._start_auto_refresh()
 
     def _build_ui(self):
         btn_bar = ttk.Frame(self)
         btn_bar.pack(fill="x", padx=6, pady=(6, 2))
-        ttk.Button(btn_bar, text="💬 Добавить комментарий", command=self._add_comment).pack(side="left", padx=2)
         ttk.Button(btn_bar, text="🔄 Обновить", command=self.refresh).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="❌ Сбросить фильтр", command=self._reset_filter).pack(side="left", padx=2)
 
         tree_frame = ttk.Frame(self)
         tree_frame.pack(fill="both", expand=True, padx=6, pady=4)
@@ -1652,21 +1657,51 @@ class LogTab(ttk.Frame):
         hsb.pack(side="bottom", fill="x")
         self.tree.pack(side="left", fill="both", expand=True)
 
+        # Настройка столбцов с новой структурой
+        widths = {
+            "дата_време": 140,
+            "операция": 80,
+            "комплектующее": 200,
+            "тип_изменения": 120,
+            "кол_во_остаток": 150,
+            "комментарий": 200
+        }
+
         for c in cols:
             header = LOG_HEADERS.get(c, c)
             self.tree.heading(c, text=header, anchor="w",
                               command=lambda col=c: self._sort_by(col))
-            widths = {"дата_время": 140, "операция": 90, "комплектующее": 150,
-                      "изменение": 300, "комментарий": 200}
             self.tree.column(c, width=widths.get(c, 120), minwidth=60, anchor="w")
 
-        self.tree.bind("<Double-1>", lambda e: self._add_comment())
-        self._sort_col = "дата_время"
-        self._sort_asc = False
+        # Добавляем Excel фильтр
+        self._filter = ExcelStyleFilter(self.tree, self._on_filter_change)
 
-        self._status_var = tk.StringVar()
         ttk.Label(self, textvariable=self._status_var, anchor="w").pack(
             fill="x", padx=6, pady=(0, 4))
+
+    def _start_auto_refresh(self):
+        """Запустить автообновление таблицы логов каждые 2 секунды."""
+        self.refresh()
+        self._auto_refresh_id = self.after(2000, self._start_auto_refresh)
+
+    def _stop_auto_refresh(self):
+        """Остановить автообновление."""
+        if self._auto_refresh_id:
+            self.after_cancel(self._auto_refresh_id)
+            self._auto_refresh_id = None
+
+    def _reset_filter(self):
+        """Сбросить все фильтры."""
+        if self._filter:
+            self._filter.clear_all_filters()
+            print("✅ Все фильтры сброшены")
+
+    def _on_filter_change(self):
+        """Колбэк при изменении фильтра - просто обновляем представление."""
+        print("🔍 DEBUG: Фильтр изменился, обновляем представление")
+        # Фильтр уже скрыл/показал строки, нам просто нужно обновить счётчик
+        visible_count = len(self.tree.get_children())
+        self._status_var.set(f"Видимых записей: {visible_count} / {len(self.app.log_entries)}")
 
     def _sort_by(self, col: str):
         if self._sort_col == col:
@@ -1682,10 +1717,30 @@ class LogTab(ttk.Frame):
             key=lambda e: e.get(self._sort_col, ""),
             reverse=not self._sort_asc,
         )
+
+        # 🆕 ОТЛАДКА
+        print(f"\n🔍 DEBUG refresh LogTab:")
+        print(f"  total log entries: {len(self.app.log_entries)}")
+        print(f"  _sort_col: {self._sort_col}")
+        print(f"  _sort_asc: {self._sort_asc}")
+        print(f"  reverse parameter: {not self._sort_asc}")
+
+        if entries:
+            print(f"  First entry (после сортировки): {entries[0].get('дата_време')}")
+            print(f"  Last entry (после сортировки): {entries[-1].get('дата_време')}")
+
         self.tree.delete(*self.tree.get_children())
         for e in entries:
             self.tree.insert("", "end", values=[e.get(c, "") for c in LOG_COLUMNS])
-        self._status_var.set(f"Записей в журнале: {len(entries)}")
+        self._status_var.set(f"Всего записей: {len(entries)}")
+
+        # Инициализируем кэш фильтра для новых элементов
+        if self._filter:
+            if not hasattr(self._filter, '_all_item_cache'):
+                self._filter._all_item_cache = set()
+            self._filter._all_item_cache = set(self.tree.get_children(''))
+
+        print(f"✅ Таблица обновлена!")
 
     def _add_comment(self):
         sel = self.tree.selection()
@@ -1696,24 +1751,16 @@ class LogTab(ttk.Frame):
         dt_val = row_values[0] if row_values else ""
 
         # Найти запись в логе по дате
-        entry = next(
-            (e for e in self.app.log_entries if e.get("дата_время") == dt_val),
-            None,
-        )
+        entry = next((e for e in self.app.log_entries if e.get("дата_време") == dt_val), None)
         if entry is None:
             return
 
-        current = entry.get("комментарий", "")
-        new_comment = simpledialog.askstring(
-            "Комментарий", "Введите комментарий:",
-            initialvalue=current,
-            parent=self.winfo_toplevel(),
-        )
-        if new_comment is None:
-            return
-        entry["комментарий"] = new_comment
-        self.app.auto_save()
-        self.refresh()
+        comment = simpledialog.askstring("Комментарий", "Добавить комментарий:",
+                                         initialvalue=entry.get("комментарий", ""))
+        if comment is not None:
+            entry["комментарий"] = comment
+            self.app.auto_save()
+            self.refresh()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1843,17 +1890,38 @@ class MainApp(tk.Tk):
 
     # ── лог ───────────────────────────────────────────────
 
-    def add_log(self, operation: str, component: str, change: str, comment: str = ""):
+    def add_log(self, operation: str, component: str, change: str):
+        """Добавить запись в лог с новой структурой."""
+        # Парсим change для извлечения типа изменения и кол-во/остаток
+        type_change = ""
+        qty_remainder = ""
+
+        # Формат: "Добавление: +30 Остаток: 130" или "Уменьшение: -200 Остаток: 0"
+        if "Добавление:" in change and "Остаток:" in change:
+            type_change = "Добавление"
+            parts = change.split("Остаток:")
+            qty_part = parts[0].replace("Добавление:", "").strip()
+            remainder = parts[1].strip()
+            qty_remainder = f"{qty_part} / Остаток: {remainder}"
+        elif "Уменьшение:" in change and "Остаток:" in change:
+            type_change = "Уменьшение"
+            parts = change.split("Остаток:")
+            qty_part = parts[0].replace("Уменьшение:", "").strip()
+            remainder = parts[1].strip()
+            qty_remainder = f"{qty_part} / Остаток: {remainder}"
+        else:
+            # Для других операций (добавление типа, удаление и т.д.)
+            qty_remainder = change
+
         entry = {
             "дата_время": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "операция": operation,
             "комплектующее": component,
-            "изменение": change,
-            "комментарий": comment,
+            "тип_изменения": type_change,
+            "кол_во_остаток": qty_remainder,
+            "комментарий": "",
         }
         self.log_entries.append(entry)
-        if hasattr(self, "tab_log"):
-            self.tab_log.refresh()
 
     # ── сохранение ────────────────────────────────────────
 
