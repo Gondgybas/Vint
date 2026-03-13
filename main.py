@@ -466,6 +466,47 @@ class ExcelStyleFilter:
             # Показываем меню фильтра
             self.show_filter_menu(event, column_id)
 
+    def reapply_all_filters(self):
+        """Переприменить все активные фильтры"""
+        if not self.active_filters:
+            return
+
+        print(f"  reapply_all_filters called with: {self.active_filters}")
+
+        # Показываем все элементы
+        for item_id in self._all_item_cache:
+            try:
+                self.tree.reattach(item_id, '', 'end')
+            except:
+                pass
+
+        # Применяем все активные фильтры
+        visible_items = set(self.tree.get_children(''))
+
+        for col_id, values in self.active_filters.items():
+            try:
+                col_index = list(self.tree["columns"]).index(col_id)
+                items_to_hide = set()
+
+                for item_id in visible_items:
+                    try:
+                        item_values = self.tree.item(item_id)["values"]
+                        value = str(item_values[col_index])
+
+                        if value not in values:
+                            items_to_hide.add(item_id)
+                    except:
+                        pass
+
+                for item_id in items_to_hide:
+                    self.tree.detach(item_id)
+
+                visible_items -= items_to_hide
+            except:
+                pass
+
+        self.update_column_headers()
+
     def show_filter_menu(self, event, column_id):
         """Показать меню фильтра для столбца"""
         try:
@@ -773,11 +814,18 @@ class ExcelStyleFilter:
 
     def apply_filter(self, column_id, selected_values, sort_order):
         """Применить фильтр"""
+        print(f"\n🔍 DEBUG apply_filter:")
+        print(f"  column_id: {column_id}")
+        print(f"  selected_values: {selected_values}")
+
         self.active_filters[column_id] = selected_values
+        print(f"  active_filters: {self.active_filters}")
 
         column_index = list(self.tree["columns"]).index(column_id)
+        print(f"  column_index: {column_index}")
 
         # Показываем все из кэша
+        print(f"  _all_item_cache size: {len(self._all_item_cache)}")
         for item_id in self._all_item_cache:
             try:
                 self.tree.reattach(item_id, '', 'end')
@@ -786,9 +834,11 @@ class ExcelStyleFilter:
 
         # Применяем ВСЕ активные фильтры
         visible_items = set(self.tree.get_children(''))
+        print(f"  visible_items before filter: {len(visible_items)}")
 
         for col_id, values in self.active_filters.items():
             col_index = list(self.tree["columns"]).index(col_id)
+            print(f"  Processing filter for {col_id} (index {col_index})")
 
             items_to_hide = set()
 
@@ -799,17 +849,22 @@ class ExcelStyleFilter:
 
                     if value not in values:
                         items_to_hide.add(item_id)
-                except:
+                        print(f"    Hiding item {item_id}: value='{value}' not in {values}")
+                except Exception as e:
+                    print(f"    Error processing item {item_id}: {e}")
                     pass
 
+            print(f"  items_to_hide: {len(items_to_hide)}")
             for item_id in items_to_hide:
                 self.tree.detach(item_id)
 
             visible_items -= items_to_hide
 
+        print(f"  visible_items after filter: {len(visible_items)}")
         self.update_column_headers()
 
         if self.refresh_callback:
+            print(f"  Calling refresh_callback")
             self.refresh_callback()
 
     def update_column_headers(self):
@@ -893,11 +948,13 @@ class ComponentsTab(ttk.Frame):
             width = 120 if c not in ("id", "тип") else (40 if c == "id" else 90)
             self.tree.column(c, width=width, minwidth=50, anchor="w")
 
-        # Устанавливаем фильтр после конфигурации столбцов
+        # Устанавливаем фильтр ТОЛЬКО если его нет
         if self._filter is None:
-            self._filter = ExcelStyleFilter(self.tree, self.refresh)  # ✅ ExcelStyleFilter
+            print("🔧 Creating new filter")
+            self._filter = ExcelStyleFilter(self.tree, self.refresh)
         else:
-            self._filter.active_filters.clear()
+            print(f"🔧 Filter already exists, keeping filters: {self._filter.active_filters}")
+            # НЕ СБРАСЫВАЕМ ФИЛЬТРЫ!
 
     def _collect_extra_keys(self) -> list[str]:
         keys = []
@@ -911,6 +968,12 @@ class ComponentsTab(ttk.Frame):
 
     def refresh(self):
         """Перерисовать таблицу (с учётом фильтра)."""
+        print(f"\n📊 DEBUG ComponentsTab.refresh()")
+
+        # 🆕 СОХРАНЯЕМ КЭШ ПЕРЕД ПЕРЕНАЛАСТРОЙКОЙ
+        old_cache = self._filter._all_item_cache if self._filter and hasattr(self._filter, '_all_item_cache') else set()
+        print(f"  Preserving old cache: {len(old_cache)} items")
+
         extra_keys = self._collect_extra_keys()
         self._setup_columns(extra_keys)
 
@@ -920,6 +983,8 @@ class ComponentsTab(ttk.Frame):
             for k in extra_keys:
                 row.append(item.get("доп_параметры", {}).get(k, ""))
             all_rows.append(tuple(row))
+
+        print(f"  Total components: {len(all_rows)}")
 
         # Очищаем таблицу
         self.tree.delete(*self.tree.get_children())
@@ -933,10 +998,21 @@ class ComponentsTab(ttk.Frame):
             if not hasattr(self._filter, '_all_item_cache'):
                 self._filter._all_item_cache = set()
             self._filter._all_item_cache = set(self.tree.get_children(''))
+            print(f"  Active filters: {self._filter.active_filters}")
+
+            # 🆕 ПЕРЕПРИМЕНЯЕМ СУЩЕСТВУЮЩИЕ ФИЛЬТРЫ
+            if self._filter.active_filters:
+                print(f"  Reapplying filters...")
+                self._filter.reapply_all_filters()
+                visible_count = len(self.tree.get_children(''))
+                print(f"  Visible items after reapply: {visible_count}")
+            else:
+                visible_count = len(all_rows)
+        else:
+            visible_count = len(all_rows)
 
         total = len(self.app.components)
-        shown = total
-        self._status_var.set(f"Показано: {shown} из {total}")
+        self._status_var.set(f"Показано: {visible_count} из {total}")
 
         if self._filter and self._filter.active_filters:
             self._filter_status.config(text="⚠ Активны фильтры")
