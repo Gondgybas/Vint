@@ -290,38 +290,15 @@ def component_label(item: dict) -> str:
     return " ".join(parts) if parts else f"ID={item.get('id', '?')}"
 
 
-def diff_items(old: dict, new: dict) -> str:
-    """Описать разницу между двумя версиями комплектующего."""
-    changes = []
-    fields = {
-        "тип": "Тип",
-        "диаметр": "Диаметр",
-        "длина": "Длина",
-        "количество": "Количество",
-        "вес_единицы": "Вес/ед.",
-    }
-    for key, label in fields.items():
-        ov = str(old.get(key, "")).strip()
-        nv = str(new.get(key, "")).strip()
-        if ov != nv:
-            changes.append(f"{label}: {ov} → {nv}")
+def diff_items(old_item: dict, new_item: dict) -> str:
+    """Сравнить два комплектующих и вернуть описание изменений (только количество)."""
+    old_qty = old_item.get("количество", "")
+    new_qty = new_item.get("количество", "")
 
-    # Дополнительные параметры
-    old_extra = old.get("доп_параметры", {})
-    new_extra = new.get("доп_параметры", {})
-    all_keys = set(old_extra) | set(new_extra)
-    for k in sorted(all_keys):
-        ov = str(old_extra.get(k, "")).strip()
-        nv = str(new_extra.get(k, "")).strip()
-        if ov != nv:
-            if not ov:
-                changes.append(f"{k}: добавлено «{nv}»")
-            elif not nv:
-                changes.append(f"{k}: удалено «{ov}»")
-            else:
-                changes.append(f"{k}: {ov} → {nv}")
+    if old_qty == new_qty:
+        return "Без изменений"
 
-    return "; ".join(changes) if changes else "Без изменений"
+    return f"Количество: {old_qty} → {new_qty}"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1535,17 +1512,17 @@ class ComponentDetailsTab(ttk.Frame):
         new_item["id"] = str(next_id(self.app.components))
         new_item["type_id"] = self.app.selected_type.get("id")
 
-        # 🆕 ОТЛАДКА
-        print(f"\n🔍 DEBUG add_item:")
-        print(f"  new_item: {new_item}")
-        print(f"  доп_параметры: {new_item.get('доп_параметры', {})}")
-
         self.app.components.append(new_item)
-        self.app.add_log(
-            operation="Добавление",
-            component=component_label(new_item),
-            change=f"Добавлено новое комплектующее: {component_label(new_item)}",
-        )
+
+        # 🆕 Логируем ТОЛЬКО если количество > 0
+        qty = new_item.get("доп_параметры", {}).get("Количество", "")
+        if qty and qty != "0":
+            self.app.add_log(
+                operation="Добавление",
+                component=component_label(new_item),
+                change=f"Добавлено: Количество {qty}",
+            )
+
         self.app.auto_save()
         self.refresh()
 
@@ -1560,17 +1537,8 @@ class ComponentDetailsTab(ttk.Frame):
         if item is None:
             return
 
-        # 🆕 ОТЛАДКА
-        print(f"\n🔍 DEBUG edit_item:")
-        print(f"  item_id: {item_id}")
-        print(f"  item: {item}")
-        print(f"  тип: {item.get('тип', '')}")
-        print(f"  доп_параметры: {item.get('доп_параметры', {})}")
-
         old_item = copy.deepcopy(item)
         dlg = ComponentDialog(self.winfo_toplevel(), "Редактировать комплектующее", item, app=self.app)
-
-        # 🆕 При редактировании СРАЗУ выбираем тип и загружаем параметры
         dlg._type_name_var.set(item.get("тип", ""))
         dlg._on_type_selected()
 
@@ -1578,14 +1546,20 @@ class ComponentDetailsTab(ttk.Frame):
         if dlg.result is None:
             return
 
-        change_desc = diff_items(old_item, dlg.result)
-        item.update(dlg.result)
-        if change_desc != "Без изменений":
+        # 🆕 Логируем ТОЛЬКО изменение количества
+        old_qty = old_item.get("доп_параметры", {}).get("Количество", "")
+        new_qty = dlg.result.get("доп_параметры", {}).get("Количество", "")
+
+        change_desc = "Без изменений"
+        if old_qty != new_qty:
+            change_desc = f"Количество: {old_qty} → {new_qty}"
             self.app.add_log(
                 operation="Изменение",
                 component=component_label(item),
                 change=change_desc,
             )
+
+        item.update(dlg.result)
         self.app.auto_save()
         self.refresh()
 
