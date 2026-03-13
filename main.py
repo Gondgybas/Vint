@@ -378,8 +378,7 @@ class ComponentDialog(tk.Toplevel):
         form = self._scroll_frame
         r = 0
 
-        # Стандартные поля
-        # 🆕 ПАРАМЕТР ТИП (название типа из списка типов)
+        # 🆕 ПАРАМЕТР ТИП (название типа из списка типов) - ЕДИНСТВЕННОЕ ПОЛЕ!
         ttk.Label(form, text="Тип *").grid(row=r, column=0, sticky="w", padx=5, pady=4)
         self._type_name_var = tk.StringVar()
         # Получаем список названий типов из app
@@ -390,16 +389,26 @@ class ComponentDialog(tk.Toplevel):
         cb_type_name.grid(row=r, column=1, sticky="ew", padx=5, pady=4)
         r += 1
 
-        ttk.Label(form, text="Диаметр").grid(row=r, column=0, sticky="w", padx=5, pady=4)
-        self._diam_var = tk.StringVar()
-        cb_diam = ttk.Combobox(form, textvariable=self._diam_var, values=DIAMETER_OPTIONS, width=28)
-        cb_diam.grid(row=r, column=1, sticky="ew", padx=5, pady=4)
-        r += 1
+        # 🆕 При выборе типа загружаем его параметры
+        cb_type_name.bind("<<ComboboxSelected>>", self._on_type_selected)
 
-        ttk.Label(form, text="Длина (мм)").grid(row=r, column=0, sticky="w", padx=5, pady=4)
-        self._len_var = tk.StringVar()
-        ttk.Entry(form, textvariable=self._len_var, width=30).grid(row=r, column=1, sticky="ew", padx=5, pady=4)
-        r += 1
+        def _on_type_selected(self, event=None):
+            """При выборе типа загружаем его параметры"""
+            type_name = self._type_name_var.get().strip()
+            if not type_name or not self._app:
+                return
+
+            # Очищаем старые параметры
+            for _, _, frame in self._extra_rows:
+                frame.destroy()
+            self._extra_rows = []
+
+            # Находим тип и добавляем его параметры
+            type_item = next((t for t in self._app.component_types if t.get("название") == type_name), None)
+            if type_item:
+                type_params = type_item.get("параметры", [])
+                for param_name in type_params:
+                    self._add_extra_row(param_name, "")
 
         # 🆕 НЕ ПОКАЗЫВАЕМ стандартные поля Количество и Вес/ед.
         # Они будут в параметрах типа!
@@ -477,13 +486,7 @@ class ComponentDialog(tk.Toplevel):
             messagebox.showwarning("Внимание", "Поле «Тип» обязательно для заполнения.", parent=self)
             return
 
-        # Валидация длины
-        length_value = self._len_var.get().strip()
-        if length_value and not self._is_number(length_value):
-            messagebox.showwarning("Внимание", "Длина должна быть числом.", parent=self)
-            return
-
-        # Собираем параметры
+        # Собираем параметры (ТОЛЬКО ИЗ ТИПА!)
         params = {}
         for key_var, val_var, _ in self._extra_rows:
             param_key = key_var.get().strip()
@@ -491,12 +494,12 @@ class ComponentDialog(tk.Toplevel):
             if param_key:
                 params[param_key] = param_val
 
-        # Результат
+        # Результат (БЕЗ диаметра, длины и т.д.)
         self.result = {
             "id": self._item.get("id", ""),
             "тип": selected_type,
-            "диаметр": self._diam_var.get().strip(),
-            "длина": length_value,
+            "диаметр": "",  # 🆕 Пусто
+            "длина": "",    # 🆕 Пусто
             "количество": "",
             "вес_единицы": "",
             "доп_параметры": params,
@@ -534,6 +537,26 @@ class ComponentTypeDialog(tk.Toplevel):
         y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
         self.geometry(f"{w}x{h}+{x}+{y}")
         self.minsize(400, 350)
+
+    def _on_type_selected(self, event=None):
+        """При выборе типа загружаем его параметры"""
+        type_name = self._type_name_var.get().strip()
+        if not type_name or not self._app:
+            return
+
+        # Очищаем старые параметры
+        for _, _, frame in self._extra_rows:
+            frame.destroy()
+        self._extra_rows = []
+
+        # Находим тип и добавляем его параметры
+        type_item = next((t for t in self._app.component_types if t.get("название") == type_name), None)
+        if type_item:
+            type_params = type_item.get("параметры", [])
+            for param_name in type_params:
+                self._add_extra_row(param_name, "")
+
+    # ── построение интерфейса ──────────────────────────────
 
     def _build_ui(self):
         outer = ttk.Frame(self, padding=10)
