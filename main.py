@@ -38,7 +38,7 @@ TYPES_HEADERS = {
 # Параметры по умолчанию для каждого типа
 DEFAULT_TYPE_PARAMETERS = []
 
-STANDARD_COLUMNS = ["id", "тип", "количество", "комментарий"]
+STANDARD_COLUMNS = ["id", "type_id", "тип", "диаметр", "длина", "количество", "вес_единицы"]
 STANDARD_HEADERS = {
     "id": "ID",
     "тип": "Тип",
@@ -206,7 +206,7 @@ def save_all_with_types(file_path: str, types: list, components: list, log_entri
             row["доп_параметры"] = json.dumps(item.get("доп_параметры", {}), ensure_ascii=False)
             rows.append(row)
 
-        comp_cols = ["id", "type_id"] + STANDARD_COLUMNS + ["доп_параметры"]
+        comp_cols = ["id", "type_id", "тип", "диаметр", "длина", "количество", "вес_единицы", "доп_параметры"]
         df_comp = pd.DataFrame(rows, columns=comp_cols) if rows else pd.DataFrame(columns=comp_cols)
 
         df_log = pd.DataFrame(log_entries, columns=LOG_COLUMNS) if log_entries else pd.DataFrame(columns=LOG_COLUMNS)
@@ -522,9 +522,9 @@ class ComponentDialog(tk.Toplevel):
             "тип": selected_type,
             "диаметр": "",
             "длина": "",
-            "количество": "",
+            "количество": params.get("Количество", ""),  # 🆕 Сохраняем количество
             "вес_единицы": "",
-            "доп_параметры": params,
+            "доп_параметры": params,  # 🆕 Все параметры в доп_параметры
         }
         self.destroy()
 
@@ -1393,20 +1393,35 @@ class ComponentDetailsTab(ttk.Frame):
             fill="x", padx=6, pady=(0, 4))
 
     def _setup_columns(self, extra_keys: list[str]):
-        """Настроить столбцы таблицы с учётом доп. параметров ��ипа."""
+        """Настроить столбцы таблицы с учётом доп. параметров типа."""
         # 🆕 Стандартные колонки: id, тип, параметры типа, количество, комментарий
         type_params = []
         if hasattr(self.app, 'selected_type') and self.app.selected_type:
             type_params = self.app.selected_type.get("параметры", [])
 
         # 🆕 Порядок: id, тип, [параметры типа], количество, комментарий
-        cols = list(STANDARD_COLUMNS[:2]) + type_params + list(STANDARD_COLUMNS[2:])
+        # БЕЗ диаметра и длины!
+        cols = ["id", "тип"] + type_params + ["количество", "комментарий"]
         self.tree.configure(columns=cols)
 
         for c in cols:
-            header = STANDARD_HEADERS.get(c, c)
+            if c == "id":
+                header = "ID"
+                width = 40
+            elif c == "тип":
+                header = "Тип"
+                width = 90
+            elif c == "количество":
+                header = "Количество"
+                width = 100
+            elif c == "комментарий":
+                header = "Комментарий"
+                width = 120
+            else:
+                header = c
+                width = 100
+
             self.tree.heading(c, text=header, anchor="w")
-            width = 120 if c not in ("id", "тип") else (40 if c == "id" else 90)
             self.tree.column(c, width=width, minwidth=50, anchor="w")
 
         # Устанавливаем фильтр
@@ -1440,10 +1455,11 @@ class ComponentDetailsTab(ttk.Frame):
         all_rows = []
         for item in filtered_components:
             # 🆕 Порядок: id, тип, [параметры типа], количество, комментарий
-            row = [item.get(c, "") for c in STANDARD_COLUMNS[:2]]  # id, тип
+            # БЕЗ диаметра и длины!
+            row = [item.get("id", ""), item.get("тип", "")]
             for k in extra_keys:
-                row.append(item.get("доп_параметры", {}).get(k, ""))  # параметры типа
-            row.extend([item.get(c, "") for c in STANDARD_COLUMNS[2:]])  # количество, комментарий
+                row.append(item.get("доп_параметры", {}).get(k, ""))
+            row.extend([item.get("количество", ""), item.get("комментарий", "")])
             all_rows.append(tuple(row))
 
         # Очищаем таблицу
@@ -1492,17 +1508,22 @@ class ComponentDetailsTab(ttk.Frame):
             return
 
         dlg = ComponentDialog(self.winfo_toplevel(), "Добавить комплектующее", app=self.app)
-        # 🆕 СРАЗУ выбираем тип
         dlg._type_name_var.set(self.app.selected_type.get("название", ""))
-        # 🆕 И загружаем параметры
         dlg._on_type_selected()
 
         self.wait_window(dlg)
         if dlg.result is None:
             return
+
         new_item = dlg.result
         new_item["id"] = str(next_id(self.app.components))
         new_item["type_id"] = self.app.selected_type.get("id")
+
+        # 🆕 ОТЛАДКА
+        print(f"\n🔍 DEBUG add_item:")
+        print(f"  new_item: {new_item}")
+        print(f"  доп_параметры: {new_item.get('доп_параметры', {})}")
+
         self.app.components.append(new_item)
         self.app.add_log(
             operation="Добавление",
@@ -1802,9 +1823,20 @@ class MainApp(tk.Tk):
 
     def auto_save(self):
         db_path = get_db_path(self.settings)
+        print(f"\n🔍 DEBUG auto_save:")
+        print(f"  db_path: {db_path}")
+        print(f"  components count: {len(self.components)}")
+
+        # 🆕 Выводим первое комплектующее для проверки
+        if self.components:
+            first_comp = self.components[0]
+            print(f"  First component: {first_comp}")
+            print(f"  доп_параметры: {first_comp.get('доп_параметры', {})}")
+
         save_all_with_types(db_path, self.component_types, self.components, self.log_entries)
         self._status_var.set(f"Сохранено: {datetime.now().strftime('%H:%M:%S')}")
         self._db_path_label.config(text=db_path)
+        print(f"✅ Сохранено!")
 
     # ── настройки ─────────────────────────────────────────
 
