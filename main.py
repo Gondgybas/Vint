@@ -38,15 +38,14 @@ TYPES_HEADERS = {
 # Параметры по умолчанию для каждого типа
 DEFAULT_TYPE_PARAMETERS = ["Количество", "Комментарий"]
 
-STANDARD_COLUMNS = ["id", "тип", "диаметр", "длина", "количество", "вес_единицы"]
+STANDARD_COLUMNS = ["id", "тип", "количество", "комментарий"]
 STANDARD_HEADERS = {
     "id": "ID",
     "тип": "Тип",
-    "диаметр": "Диаметр",
-    "длина": "Длина (мм)",
     "количество": "Количество",
-    "вес_единицы": "Вес/ед. (кг)",
+    "комментарий": "Комментарий",
 }
+
 LOG_COLUMNS = ["дата_время", "операция", "комплектующее", "изменение", "комментарий"]
 LOG_HEADERS = {
     "дата_время": "Дата и время",
@@ -429,24 +428,19 @@ class ComponentDialog(tk.Toplevel):
     def _add_extra_row(self, key: str = "", value: str = ""):
         row_frame = ttk.Frame(self._extra_container)
         idx = len(self._extra_rows)
-        row_frame.grid(row=idx, column=0, columnspan=3, sticky="ew", pady=2)
+        row_frame.grid(row=idx, column=0, columnspan=2, sticky="ew", pady=2)
         row_frame.columnconfigure(0, weight=1)
         row_frame.columnconfigure(1, weight=1)
 
         key_var = tk.StringVar(value=key)
         val_var = tk.StringVar(value=value)
 
-        # 🆕 Первое поле - ТОЛЬКО ДЛЯ ОТОБРАЖЕНИЯ названия параметра (READONLY)
-        ttk.Entry(row_frame, textvariable=key_var, width=16, state="readonly").grid(row=0, column=0, sticky="ew",
-                                                                                    padx=(0, 2))
+        # 🆕 Название параметра (только для отображения)
+        ttk.Label(row_frame, text=key, font=("", 9, "bold")).grid(row=0, column=0, sticky="w", padx=5)
 
-        # 🆕 Второе поле - ДЛЯ ВВОДА значения
-        ttk.Entry(row_frame, textvariable=val_var, width=16).grid(row=0, column=1, sticky="ew", padx=2)
+        # 🆕 Поле для ВВОДА значения
+        ttk.Entry(row_frame, textvariable=val_var, width=30).grid(row=0, column=1, sticky="ew", padx=5)
 
-        # 🆕 Кнопка удаления
-        ttk.Button(row_frame, text="✕", width=3,
-                   command=lambda f=row_frame, kv=key_var, vv=val_var: self._remove_extra_row(f, kv, vv)).grid(
-            row=0, column=2)
         self._extra_rows.append((key_var, val_var, row_frame))
 
     def _remove_extra_row(self, frame, key_var, val_var):
@@ -454,7 +448,19 @@ class ComponentDialog(tk.Toplevel):
         frame.destroy()
 
     def _populate(self, item: dict):
+        # Устанавливаем тип (если редактируем)
         self._type_name_var.set(item.get("тип", ""))
+
+        # Загружаем параметры из существующего комплектующего
+        if item.get("id"):  # Если редактируем
+            type_name = item.get("тип", "")
+            if type_name and self._app and hasattr(self._app, 'component_types'):
+                type_item = next((t for t in self._app.component_types if t.get("название") == type_name), None)
+                if type_item:
+                    type_params = type_item.get("параметры", [])
+                    for param_name in type_params:
+                        param_value = item.get("доп_параметры", {}).get(param_name, "")
+                        self._add_extra_row(param_name, param_value)
 
     def _on_ok(self):
         selected_type = self._type_name_var.get().strip()
@@ -462,7 +468,7 @@ class ComponentDialog(tk.Toplevel):
             messagebox.showwarning("Внимание", "Поле «Тип» обязательно для заполнения.", parent=self)
             return
 
-        # Собираем параметры
+        # Собираем параметры типа
         params = {}
         for key_var, val_var, _ in self._extra_rows:
             param_key = key_var.get().strip()
@@ -475,7 +481,7 @@ class ComponentDialog(tk.Toplevel):
             "тип": selected_type,
             "диаметр": "",
             "длина": "",
-            "количество": "",
+            "количество": params.get("Количество", ""),  # 🆕 Из параметров типа
             "вес_единицы": "",
             "доп_параметры": params,
         }
@@ -1347,14 +1353,16 @@ class ComponentDetailsTab(ttk.Frame):
             fill="x", padx=6, pady=(0, 4))
 
     def _setup_columns(self, extra_keys: list[str]):
-        """Настроить столбцы таблицы с учётом доп. параметров типа."""
-        # 🆕 Используем параметры из типа
+        """Настроить столбцы таблицы с учётом доп. параметров ��ипа."""
+        # 🆕 Стандартные колонки: id, тип, параметры типа, количество, комментарий
         type_params = []
         if hasattr(self.app, 'selected_type') and self.app.selected_type:
             type_params = self.app.selected_type.get("параметры", [])
 
-        cols = list(STANDARD_COLUMNS) + type_params
+        # 🆕 Порядок: id, тип, [параметры типа], количество, комментарий
+        cols = list(STANDARD_COLUMNS[:2]) + type_params + list(STANDARD_COLUMNS[2:])
         self.tree.configure(columns=cols)
+
         for c in cols:
             header = STANDARD_HEADERS.get(c, c)
             self.tree.heading(c, text=header, anchor="w")
@@ -1391,9 +1399,11 @@ class ComponentDetailsTab(ttk.Frame):
 
         all_rows = []
         for item in filtered_components:
-            row = [item.get(c, "") for c in STANDARD_COLUMNS]
+            # 🆕 Порядок: id, тип, [параметры типа], количество, комментарий
+            row = [item.get(c, "") for c in STANDARD_COLUMNS[:2]]  # id, тип
             for k in extra_keys:
-                row.append(item.get("доп_параметры", {}).get(k, ""))
+                row.append(item.get("доп_параметры", {}).get(k, ""))  # параметры типа
+            row.extend([item.get(c, "") for c in STANDARD_COLUMNS[2:]])  # количество, комментарий
             all_rows.append(tuple(row))
 
         # Очищаем таблицу
@@ -1441,7 +1451,12 @@ class ComponentDetailsTab(ttk.Frame):
             messagebox.showinfo("Внимание", "Выберите тип комплектующего сначала.")
             return
 
-        dlg = ComponentDialog(self.winfo_toplevel(), "Добавить комплектующее", app=self.app)  # 🆕 app=self.app
+        dlg = ComponentDialog(self.winfo_toplevel(), "Добавить комплектующее", app=self.app)
+        # 🆕 СРАЗУ выбираем тип
+        dlg._type_name_var.set(self.app.selected_type.get("название", ""))
+        # 🆕 И загружаем параметры
+        dlg._on_type_selected()
+
         self.wait_window(dlg)
         if dlg.result is None:
             return
@@ -1469,7 +1484,12 @@ class ComponentDetailsTab(ttk.Frame):
             return
 
         old_item = copy.deepcopy(item)
-        dlg = ComponentDialog(self.winfo_toplevel(), "Редактировать комплектующее", item, app=self.app)  # 🆕 app=self.app
+        dlg = ComponentDialog(self.winfo_toplevel(), "Редактировать комплектующее", item, app=self.app)
+
+        # 🆕 При редактировании СРАЗУ выбираем тип и загружаем параметры
+        dlg._type_name_var.set(item.get("тип", ""))
+        dlg._on_type_selected()
+
         self.wait_window(dlg)
         if dlg.result is None:
             return
