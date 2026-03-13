@@ -1340,7 +1340,7 @@ class ComponentTypesTab(ttk.Frame):
 
         if components_count > 0:
             messagebox.showwarning("Внимание",
-                                   f"Не можно удалить тип с {components_count} комплектующими.\nСначала удалите все комплектующие этого типа.")
+                                   f"Не возможно удалить тип с {components_count} комплектующими.\nСначала удалите все комплектующие этого типа.")
             return
 
         if not messagebox.askyesno("Удаление", f"Удалить тип «{type_name}»?"):
@@ -1632,12 +1632,11 @@ class LogTab(ttk.Frame):
         super().__init__(master)
         self.app = app
         self._filter = None
-        self._sort_col = "дата_время"  # 🆕 Исправлено
+        self._sort_col = "дата_время"
         self._sort_asc = False
         self._status_var = tk.StringVar()
         self._build_ui()
-        self._auto_refresh_id = None
-        self._start_auto_refresh()
+        self.refresh()
 
     def _build_ui(self):
         btn_bar = ttk.Frame(self)
@@ -1659,7 +1658,7 @@ class LogTab(ttk.Frame):
 
         # Настройка столбцов с новой структурой
         widths = {
-            "дата_време": 140,
+            "дата_время": 140,
             "операция": 80,
             "комплектующее": 200,
             "тип_изменения": 120,
@@ -1679,17 +1678,6 @@ class LogTab(ttk.Frame):
         ttk.Label(self, textvariable=self._status_var, anchor="w").pack(
             fill="x", padx=6, pady=(0, 4))
 
-    def _start_auto_refresh(self):
-        """Запустить автообновление таблицы логов каждые 2 секунды."""
-        self.refresh()
-        self._auto_refresh_id = self.after(2000, self._start_auto_refresh)
-
-    def _stop_auto_refresh(self):
-        """Остановить автообновление."""
-        if self._auto_refresh_id:
-            self.after_cancel(self._auto_refresh_id)
-            self._auto_refresh_id = None
-
     def _reset_filter(self):
         """Сбросить все фильтры."""
         if self._filter:
@@ -1697,9 +1685,7 @@ class LogTab(ttk.Frame):
             print("✅ Все фильтры сброшены")
 
     def _on_filter_change(self):
-        """Колбэк при изменении фильтра - просто обновляем представление."""
-        print("🔍 DEBUG: Фильтр изменился, обновляем представление")
-        # Фильтр уже скрыл/показал строки, нам просто нужно обновить счётчик
+        """Колбэк при изменении фильтра - просто обновляем счётчик."""
         visible_count = len(self.tree.get_children())
         self._status_var.set(f"Видимых записей: {visible_count} / {len(self.app.log_entries)}")
 
@@ -1709,30 +1695,48 @@ class LogTab(ttk.Frame):
         else:
             self._sort_col = col
             self._sort_asc = True
+
+        # 🆕 Сохраняем активные фильтры перед обновлением
+        active_filters = self._filter.active_filters.copy() if self._filter else {}
+
         self.refresh()
 
+        # 🆕 Восстанавливаем фильтры после обновления
+        if self._filter and active_filters:
+            self._filter.active_filters = active_filters
+            self._filter.reapply_all_filters()
+
     def refresh(self):
-        entries = sorted(
-            self.app.log_entries,
-            key=lambda e: e.get(self._sort_col, ""),
-            reverse=not self._sort_asc,
-        )
+        """Обновить таблицу логов."""
+        # 🆕 Парсим даты для правильной сортировки
+        entries = self.app.log_entries.copy()
 
-        # 🆕 ОТЛАДКА
-        print(f"\n🔍 DEBUG refresh LogTab:")
-        print(f"  total log entries: {len(self.app.log_entries)}")
-        print(f"  _sort_col: {self._sort_col}")
-        print(f"  _sort_asc: {self._sort_asc}")
-        print(f"  reverse parameter: {not self._sort_asc}")
+        try:
+            if self._sort_col == "дата_време":
+                entries = sorted(
+                    entries,
+                    key=lambda e: datetime.strptime(e.get(self._sort_col, ""), "%Y-%m-%d %H:%M:%S"),
+                    reverse=not self._sort_asc,
+                )
+            else:
+                entries = sorted(
+                    entries,
+                    key=lambda e: e.get(self._sort_col, ""),
+                    reverse=not self._sort_asc,
+                )
+        except Exception as ex:
+            print(f"❌ Ошибка сортировки: {ex}")
+            entries = self.app.log_entries.copy()
 
-        if entries:
-            print(f"  First entry (после сортировки): {entries[0].get('дата_време')}")
-            print(f"  Last entry (после сортировки): {entries[-1].get('дата_време')}")
+        # 🆕 Сохраняем активные фильтры ДО очистки таблицы
+        active_filters = self._filter.active_filters.copy() if self._filter else {}
 
+        # Очищаем таблицу
         self.tree.delete(*self.tree.get_children())
+
+        # Добавляем отсортированные записи
         for e in entries:
             self.tree.insert("", "end", values=[e.get(c, "") for c in LOG_COLUMNS])
-        self._status_var.set(f"Всего записей: {len(entries)}")
 
         # Инициализируем кэш фильтра для новых элементов
         if self._filter:
@@ -1740,7 +1744,33 @@ class LogTab(ttk.Frame):
                 self._filter._all_item_cache = set()
             self._filter._all_item_cache = set(self.tree.get_children(''))
 
-        print(f"✅ Таблица обновлена!")
+            # 🆕 Заново применяем сохраненные фильтры БЕЗ перестройки
+            if active_filters:
+                self._filter.active_filters = active_filters
+                # 🆕 Просто показываем/скрываем элементы без перестройки
+                items = set(self._filter._all_item_cache)
+                for col_id, filter_values in active_filters.items():
+                    cols = self.tree["columns"]
+                    if col_id in cols:
+                        col_index = cols.index(col_id)
+                        items_to_hide = set()
+
+                        for item_id in items:
+                            try:
+                                row_values = self.tree.item(item_id)["values"]
+                                if col_index < len(row_values):
+                                    value = row_values[col_index]
+                                    if value not in filter_values:
+                                        items_to_hide.add(item_id)
+                            except:
+                                pass
+
+                        for item_id in items_to_hide:
+                            self.tree.detach(item_id)
+
+                        items -= items_to_hide
+
+        self._status_var.set(f"Всего записей: {len(entries)}")
 
     def _add_comment(self):
         sel = self.tree.selection()
@@ -1751,7 +1781,7 @@ class LogTab(ttk.Frame):
         dt_val = row_values[0] if row_values else ""
 
         # Найти запись в логе по дате
-        entry = next((e for e in self.app.log_entries if e.get("дата_време") == dt_val), None)
+        entry = next((e for e in self.app.log_entries if e.get("дата_время") == dt_val), None)
         if entry is None:
             return
 
