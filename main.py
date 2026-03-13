@@ -339,12 +339,12 @@ class ComponentDialog(tk.Toplevel):
         self.grab_set()
         self.result = None
 
-        self._app = app
+        self._app = app  # 🆕 ДОБАВЬ ЭТУ СТРОКУ!
         self._item = copy.deepcopy(item) if item else {}
-        self._extra_rows = []
+        self._extra_rows = []  # список (key_var, val_var, frame)
 
-        self._build_ui()  # ← это строка
-        self._populate(self._item)  # ← это строка
+        self._build_ui()
+        self._populate(self._item)
 
         self.update_idletasks()
         w, h = 480, 520
@@ -379,13 +379,16 @@ class ComponentDialog(tk.Toplevel):
         r = 0
 
         # Стандартные поля
-        # 🆕 ПАРАМЕТР ТИП
+        # 🆕 ПАРАМЕТР ТИП (название типа из списка типов)
+        ttk.Label(form, text="Тип *").grid(row=r, column=0, sticky="w", padx=5, pady=4)
+        self._type_name_var = tk.StringVar()
         # Получаем список названий типов из app
         type_names = []
         if self._app and hasattr(self._app, 'component_types'):
             type_names = [t.get("название", "") for t in self._app.component_types]
-
-        # Стандартные параметры
+        cb_type_name = ttk.Combobox(form, textvariable=self._type_name_var, values=type_names, width=28)
+        cb_type_name.grid(row=r, column=1, sticky="ew", padx=5, pady=4)
+        r += 1
 
         ttk.Label(form, text="Диаметр").grid(row=r, column=0, sticky="w", padx=5, pady=4)
         self._diam_var = tk.StringVar()
