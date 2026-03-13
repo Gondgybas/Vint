@@ -23,8 +23,16 @@ import subprocess
 # ─────────────────────────────────────────────────────────────
 SETTINGS_FILE = "vitaka_settings.json"
 DEFAULT_DB_NAME = "vitaka_components.xlsx"
+SHEET_TYPES = "Типы"
 SHEET_COMPONENTS = "Комплектующие"
 SHEET_LOG = "Лог"
+
+TYPES_COLUMNS = ["id", "название", "описание"]
+TYPES_HEADERS = {
+    "id": "ID",
+    "название": "Название типа",
+    "описание": "Описание",
+}
 
 STANDARD_COLUMNS = ["id", "тип", "диаметр", "длина", "количество", "вес_единицы"]
 STANDARD_HEADERS = {
@@ -85,10 +93,17 @@ def initialize_db(file_path: str):
     if os.path.exists(file_path):
         return
     wb = Workbook()
-    ws_comp = wb.active
-    ws_comp.title = SHEET_COMPONENTS
-    ws_comp.append(["id", "тип", "диаметр", "длина", "количество", "вес_единицы", "доп_параметры"])
 
+    # Лист типов
+    ws_types = wb.active
+    ws_types.title = SHEET_TYPES
+    ws_types.append(["id", "название", "описание"])
+
+    # Лист комплектующих
+    ws_comp = wb.create_sheet(SHEET_COMPONENTS)
+    ws_comp.append(["id", "type_id", "тип", "диаметр", "длина", "количество", "вес_единицы", "доп_параметры"])
+
+    # Лист логов
     ws_log = wb.create_sheet(SHEET_LOG)
     ws_log.append(["дата_время", "операция", "комплектующее", "изменение", "комментарий"])
 
@@ -128,6 +143,76 @@ def load_log(file_path: str) -> list:
         print(f"Ошибка загрузки лога: {e}")
         return []
 
+
+def load_types(file_path: str) -> list:
+    """За��рузить список типов комплектующих из Excel."""
+    try:
+        initialize_db(file_path)
+        # Проверяем наличие листа
+        if SHEET_TYPES not in pd.ExcelFile(file_path).sheet_names:
+            return []
+        df = pd.read_excel(file_path, sheet_name=SHEET_TYPES, dtype=str)
+        df = df.fillna("")
+        items = []
+        for _, row in df.iterrows():
+            item = {col: row[col] for col in TYPES_COLUMNS if col in df.columns}
+            items.append(item)
+        return items
+    except Exception as e:
+        print(f"Ошибка загрузки типов: {e}")
+        return []
+
+
+def next_type_id(types: list) -> int:
+    if not types:
+        return 1
+    try:
+        return max(int(t.get("id", 0)) for t in types) + 1
+    except Exception:
+        return len(types) + 1
+
+
+def save_all_with_types(file_path: str, types: list, components: list, log_entries: list):
+    """Сохранить все данные включая типы в Excel."""
+    try:
+        folder = os.path.dirname(file_path)
+        if folder and not os.path.exists(folder):
+            os.makedirs(folder, exist_ok=True)
+
+        # Типы
+        df_types = pd.DataFrame(types, columns=TYPES_COLUMNS) if types else pd.DataFrame(columns=TYPES_COLUMNS)
+
+        # Комплектующие
+        rows = []
+        for item in components:
+            row = {col: item.get(col, "") for col in STANDARD_COLUMNS if col != "тип"}
+            row["type_id"] = item.get("type_id", "")
+            row["тип"] = item.get("тип", "")
+            row["доп_параметры"] = json.dumps(item.get("доп_параметры", {}), ensure_ascii=False)
+            rows.append(row)
+
+        comp_cols = ["id", "type_id"] + STANDARD_COLUMNS + ["доп_параметры"]
+        df_comp = pd.DataFrame(rows, columns=comp_cols) if rows else pd.DataFrame(columns=comp_cols)
+
+        df_log = pd.DataFrame(log_entries, columns=LOG_COLUMNS) if log_entries else pd.DataFrame(columns=LOG_COLUMNS)
+
+        # Сохранение
+        if os.path.exists(file_path):
+            with pd.ExcelFile(file_path, engine="openpyxl") as xls:
+                other_sheets = {s: pd.read_excel(xls, s) for s in xls.sheet_names
+                                if s not in (SHEET_TYPES, SHEET_COMPONENTS, SHEET_LOG)}
+        else:
+            other_sheets = {}
+
+        with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
+            df_types.to_excel(writer, sheet_name=SHEET_TYPES, index=False)
+            df_comp.to_excel(writer, sheet_name=SHEET_COMPONENTS, index=False)
+            df_log.to_excel(writer, sheet_name=SHEET_LOG, index=False)
+            for name, df in other_sheets.items():
+                df.to_excel(writer, sheet_name=name, index=False)
+    except Exception as e:
+        print(f"Ошибка сохранения Excel: {e}")
+        messagebox.showerror("Ошибка сохранения", f"Не удалось сохранить файл:\n{e}")
 
 def save_all(file_path: str, components: list, log_entries: list):
     """Сохранить все данные в Excel, заменяя оба листа."""
@@ -409,6 +494,67 @@ class ComponentDialog(tk.Toplevel):
             return True
         except ValueError:
             return False
+
+class ComponentTypeDialog(tk.Toplevel):
+    """Диалоговое окно для создания или редактирования типа комплектующего."""
+
+    def __init__(self, parent, title: str, item: dict = None):
+        super().__init__(parent)
+        self.title(title)
+        self.resizable(False, False)
+        self.grab_set()
+        self.result = None
+
+        self._item = copy.deepcopy(item) if item else {}
+        self._build_ui()
+        self._populate(self._item)
+
+        self.update_idletasks()
+        w, h = 400, 200
+        x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _build_ui(self):
+        frame = ttk.Frame(self, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Название *").grid(row=0, column=0, sticky="w", padx=5, pady=4)
+        self._name_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self._name_var, width=40).grid(row=0, column=1, sticky="ew", padx=5, pady=4)
+
+        ttk.Label(frame, text="Описание").grid(row=1, column=0, sticky="nw", padx=5, pady=4)
+        self._desc_var = tk.StringVar()
+        desc_text = tk.Text(frame, height=4, width=40)
+        desc_text.grid(row=1, column=1, sticky="ew", padx=5, pady=4)
+        self._desc_text = desc_text
+
+        frame.columnconfigure(1, weight=1)
+
+        # Кнопки
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(fill="x", side="bottom", padx=10, pady=8)
+        ttk.Button(btn_frame, text="Сохранить", command=self._on_ok, width=14).pack(side="right", padx=4)
+        ttk.Button(btn_frame, text="Отмена", command=self.destroy, width=10).pack(side="right", padx=4)
+
+    def _populate(self, item: dict):
+        self._name_var.set(item.get("название", ""))
+        self._desc_text.insert("1.0", item.get("описание", ""))
+
+    def _on_ok(self):
+        название = self._name_var.get().strip()
+        if not название:
+            messagebox.showwarning("Внимание", "Поле «Название» обязательно для заполнения.", parent=self)
+            return
+
+        описание = self._desc_text.get("1.0", "end").strip()
+
+        self.result = {
+            "id": self._item.get("id", ""),
+            "название": название,
+            "описание": описание,
+        }
+        self.destroy()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -896,10 +1042,166 @@ class ExcelStyleFilter:
 
 
 # ─────────────────────────────────────────────────────────────
-#  ВКЛАДКА "КОМПЛЕКТУЮЩИЕ"
+#  ВКЛАДКА "ТИПЫ КОМПЛЕКТУЮЩИХ"
 # ─────────────────────────────────────────────────────────────
 
-class ComponentsTab(ttk.Frame):
+class ComponentTypesTab(ttk.Frame):
+    def __init__(self, master, app):
+        super().__init__(master)
+        self.app = app
+        self._build_ui()
+
+    def _build_ui(self):
+        # Панель кнопок
+        btn_bar = ttk.Frame(self)
+        btn_bar.pack(fill="x", padx=6, pady=(6, 2))
+
+        ttk.Button(btn_bar, text="➕ Добавить тип", command=self.add_type).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="✏️ Редактировать", command=self.edit_type).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="🗑️ Удалить", command=self.delete_type).pack(side="left", padx=2)
+
+        # Таблица с прокруткой
+        tree_frame = ttk.Frame(self)
+        tree_frame.pack(fill="both", expand=True, padx=6, pady=4)
+
+        self.tree = ttk.Treeview(tree_frame, columns=["название", "описание"], show="headings", selectmode="browse")
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        vsb.pack(side="right", fill="y")
+        hsb.pack(side="bottom", fill="x")
+        self.tree.pack(side="left", fill="both", expand=True)
+
+        self.tree.heading("название", text="Название типа", anchor="w")
+        self.tree.heading("описание", text="Описание", anchor="w")
+        self.tree.column("название", width=150, minwidth=100, anchor="w")
+        self.tree.column("описание", width=300, minwidth=100, anchor="w")
+
+        self.tree.bind("<Double-1>", lambda e: self.open_details())
+
+        # Строка состояния
+        self._status_var = tk.StringVar()
+        ttk.Label(self, textvariable=self._status_var, anchor="w").pack(
+            fill="x", padx=6, pady=(0, 4))
+
+    def refresh(self):
+        """Перерисовать таблицу типов."""
+        self.tree.delete(*self.tree.get_children())
+        for type_item in self.app.component_types:
+            self.tree.insert("", "end", values=[
+                type_item.get("название", ""),
+                type_item.get("описание", "")
+            ])
+        self._status_var.set(f"Типов: {len(self.app.component_types)}")
+
+    def open_details(self):
+        """Открыть вкладку с деталями типа."""
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("Выбор", "Выберите тип для просмотра.")
+            return
+
+        row_values = self.tree.item(sel[0])["values"]
+        type_name = row_values[0]
+
+        # Найти type_id
+        type_item = next((t for t in self.app.component_types if t.get("название") == type_name), None)
+        if type_item is None:
+            return
+
+        self.app.selected_type = type_item
+        self.app.notebook.select(1)  # Переключиться на вкладку "Детали типа"
+        self.app.tab_details.refresh()
+
+    def add_type(self):
+        dlg = ComponentTypeDialog(self.winfo_toplevel(), "Добавить тип комплектующего")
+        self.wait_window(dlg)
+        if dlg.result is None:
+            return
+
+        new_type = dlg.result
+        new_type["id"] = str(next_type_id(self.app.component_types))
+        self.app.component_types.append(new_type)
+
+        self.app.add_log(
+            operation="Добавление типа",
+            component=new_type.get("название", ""),
+            change=f"Добавлен новый тип: {new_type.get('название')}",
+        )
+        self.app.auto_save()
+        self.refresh()
+
+    def edit_type(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("Выбор", "Выберите тип для редактирования.")
+            return
+
+        row_values = self.tree.item(sel[0])["values"]
+        type_name = row_values[0]
+
+        type_item = next((t for t in self.app.component_types if t.get("название") == type_name), None)
+        if type_item is None:
+            return
+
+        old_type = copy.deepcopy(type_item)
+        dlg = ComponentTypeDialog(self.winfo_toplevel(), "Редактировать тип", type_item)
+        self.wait_window(dlg)
+        if dlg.result is None:
+            return
+
+        type_item.update(dlg.result)
+
+        if old_type.get("название") != dlg.result.get("название") or old_type.get("описание") != dlg.result.get(
+                "описание"):
+            self.app.add_log(
+                operation="Изменение типа",
+                component=dlg.result.get("название", ""),
+                change=f"Название: {old_type.get('название')} → {dlg.result.get('название')}",
+            )
+
+        self.app.auto_save()
+        self.refresh()
+
+    def delete_type(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("Выбор", "Выберите тип для удаления.")
+            return
+
+        row_values = self.tree.item(sel[0])["values"]
+        type_name = row_values[0]
+
+        type_item = next((t for t in self.app.component_types if t.get("название") == type_name), None)
+        if type_item is None:
+            return
+
+        # Проверяем есть ли комплектующие этого типа
+        components_count = len([c for c in self.app.components if c.get("type_id") == type_item.get("id")])
+
+        if components_count > 0:
+            messagebox.showwarning("Внимание",
+                                   f"Не можно удалить тип с {components_count} комплектующими.\nСначала удалите все комплектующие этого типа.")
+            return
+
+        if not messagebox.askyesno("Удаление", f"Удалить тип «{type_name}»?"):
+            return
+
+        self.app.component_types = [t for t in self.app.component_types if t.get("id") != type_item.get("id")]
+        self.app.add_log(
+            operation="Удаление типа",
+            component=type_name,
+            change="Тип комплектующего удалён.",
+        )
+        self.app.auto_save()
+        self.refresh()
+
+
+# ─────────────────────────────────────────────────────────────
+#  ВКЛАДКА "ДЕТАЛИ ТИПА КОМПЛЕКТУЮЩИХ"
+# ─────────────────────────────────────────────────────────────
+
+class ComponentDetailsTab(ttk.Frame):
     def __init__(self, master, app):
         super().__init__(master)
         self.app = app
@@ -911,6 +1213,7 @@ class ComponentsTab(ttk.Frame):
         btn_bar = ttk.Frame(self)
         btn_bar.pack(fill="x", padx=6, pady=(6, 2))
 
+        ttk.Button(btn_bar, text="◀️ Назад", command=self.go_back).pack(side="left", padx=2)
         ttk.Button(btn_bar, text="➕ Добавить", command=self.add_item).pack(side="left", padx=2)
         ttk.Button(btn_bar, text="✏️ Редактировать", command=self.edit_item).pack(side="left", padx=2)
         ttk.Button(btn_bar, text="🗑️ Удалить", command=self.delete_item).pack(side="left", padx=2)
@@ -918,6 +1221,9 @@ class ComponentsTab(ttk.Frame):
 
         self._filter_status = ttk.Label(btn_bar, text="", foreground="blue")
         self._filter_status.pack(side="left", padx=4)
+
+        self._type_label = ttk.Label(btn_bar, text="", font=("", 10, "bold"), foreground="darkblue")
+        self._type_label.pack(side="right", padx=10)
 
         # Таблица с прокруткой
         tree_frame = ttk.Frame(self)
@@ -948,13 +1254,11 @@ class ComponentsTab(ttk.Frame):
             width = 120 if c not in ("id", "тип") else (40 if c == "id" else 90)
             self.tree.column(c, width=width, minwidth=50, anchor="w")
 
-        # Устанавливаем фильтр ТОЛЬКО если его нет
+        # Устанавливаем фильтр
         if self._filter is None:
-            print("🔧 Creating new filter")
             self._filter = ExcelStyleFilter(self.tree, self.refresh)
         else:
             print(f"🔧 Filter already exists, keeping filters: {self._filter.active_filters}")
-            # НЕ СБРАСЫВАЕМ ФИЛЬТРЫ!
 
     def _collect_extra_keys(self) -> list[str]:
         keys = []
@@ -967,24 +1271,27 @@ class ComponentsTab(ttk.Frame):
         return keys
 
     def refresh(self):
-        """Перерисовать таблицу (с учётом фильтра)."""
-        print(f"\n📊 DEBUG ComponentsTab.refresh()")
+        """Перерисовать таблицу деталей типа."""
+        if not hasattr(self.app, 'selected_type') or self.app.selected_type is None:
+            self._type_label.config(text="Выберите тип")
+            self.tree.delete(*self.tree.get_children())
+            return
 
-        # 🆕 СОХРАНЯЕМ КЭШ ПЕРЕД ПЕРЕНАЛАСТРОЙКОЙ
-        old_cache = self._filter._all_item_cache if self._filter and hasattr(self._filter, '_all_item_cache') else set()
-        print(f"  Preserving old cache: {len(old_cache)} items")
+        type_id = self.app.selected_type.get("id")
+        type_name = self.app.selected_type.get("название", "")
 
         extra_keys = self._collect_extra_keys()
         self._setup_columns(extra_keys)
 
+        # Фильтруем комплектующие по type_id
+        filtered_components = [c for c in self.app.components if c.get("type_id") == type_id]
+
         all_rows = []
-        for item in self.app.components:
+        for item in filtered_components:
             row = [item.get(c, "") for c in STANDARD_COLUMNS]
             for k in extra_keys:
                 row.append(item.get("доп_параметры", {}).get(k, ""))
             all_rows.append(tuple(row))
-
-        print(f"  Total components: {len(all_rows)}")
 
         # Очищаем таблицу
         self.tree.delete(*self.tree.get_children())
@@ -993,46 +1300,51 @@ class ComponentsTab(ttk.Frame):
         for row in all_rows:
             self.tree.insert("", "end", values=row)
 
-        # Инициализируем кэш фильтра для отслеживания всех элементов
+        # Инициализируем кэш фильтра
         if self._filter:
             if not hasattr(self._filter, '_all_item_cache'):
                 self._filter._all_item_cache = set()
             self._filter._all_item_cache = set(self.tree.get_children(''))
-            print(f"  Active filters: {self._filter.active_filters}")
 
-            # 🆕 ПЕРЕПРИМЕНЯЕМ СУЩЕСТВУЮЩИЕ ФИЛЬТРЫ
+            # Переприменяем фильтры
             if self._filter.active_filters:
-                print(f"  Reapplying filters...")
                 self._filter.reapply_all_filters()
                 visible_count = len(self.tree.get_children(''))
-                print(f"  Visible items after reapply: {visible_count}")
             else:
                 visible_count = len(all_rows)
         else:
             visible_count = len(all_rows)
 
-        total = len(self.app.components)
-        self._status_var.set(f"Показано: {visible_count} из {total}")
+        self._type_label.config(text=f"Тип: {type_name}")
+        self._status_var.set(f"Показано: {visible_count} из {len(filtered_components)}")
 
         if self._filter and self._filter.active_filters:
             self._filter_status.config(text="⚠ Активны фильтры")
         else:
             self._filter_status.config(text="")
 
+    def go_back(self):
+        """Вернуться на вкладку типов."""
+        self.app.notebook.select(0)
+        self.app.tab_types.refresh()
+
     def reset_filters(self):
         if self._filter:
             self._filter.clear_all_filters()
         self.refresh()
 
-    # ── CRUD операции ──────────────────────────────────────
-
     def add_item(self):
+        if not hasattr(self.app, 'selected_type') or self.app.selected_type is None:
+            messagebox.showinfo("Внимание", "Выберите тип комплектующего сначала.")
+            return
+
         dlg = ComponentDialog(self.winfo_toplevel(), "Добавить комплектующее")
         self.wait_window(dlg)
         if dlg.result is None:
             return
         new_item = dlg.result
         new_item["id"] = str(next_id(self.app.components))
+        new_item["type_id"] = self.app.selected_type.get("id")
         self.app.components.append(new_item)
         self.app.add_log(
             operation="Добавление",
@@ -1091,7 +1403,6 @@ class ComponentsTab(ttk.Frame):
         )
         self.app.auto_save()
         self.refresh()
-
 
 # ─────────────────────────────────────────────────────────────
 #  ВКЛАДКА "ЛОГ"
@@ -1257,8 +1568,10 @@ class MainApp(tk.Tk):
         # Данные
         db_path = get_db_path(self.settings)
         initialize_db(db_path)
+        self.component_types = load_types(db_path)
         self.components = load_components(db_path)
         self.log_entries = load_log(db_path)
+        self.selected_type = None
 
         self._build_menu()
         self._build_ui()
@@ -1281,19 +1594,7 @@ class MainApp(tk.Tk):
         file_menu.add_command(label="Выход", command=self._on_close)
 
     def _build_ui(self):
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True, padx=4, pady=4)
-
-        self.tab_components = ComponentsTab(self.notebook, self)
-        self.notebook.add(self.tab_components, text="Комплектующие")
-
-        self.tab_log = LogTab(self.notebook, self)
-        self.notebook.add(self.tab_log, text="Журнал изменений")
-
-        self.tab_components.refresh()
-        self.tab_log.refresh()
-
-        # Строка состояния внизу
+        # 🆕 СОЗДАЁМ _status_var СНАЧАЛА
         status_bar = ttk.Frame(self, relief="sunken")
         status_bar.pack(fill="x", side="bottom")
         self._status_var = tk.StringVar(value="Готово")
@@ -1303,6 +1604,22 @@ class MainApp(tk.Tk):
             status_bar, text=get_db_path(self.settings), anchor="e",
             foreground="grey", padding=(6, 2))
         self._db_path_label.pack(side="right")
+
+        # ПОТОМ создаём вкладки
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self.tab_types = ComponentTypesTab(self.notebook, self)
+        self.notebook.add(self.tab_types, text="Типы комплектующих")
+
+        self.tab_details = ComponentDetailsTab(self.notebook, self)
+        self.notebook.add(self.tab_details, text="Детали типа")
+
+        self.tab_log = LogTab(self.notebook, self)
+        self.notebook.add(self.tab_log, text="Журнал изменений")
+
+        self.tab_types.refresh()
+        self.tab_log.refresh()
 
     # ── лог ───────────────────────────────────────────────
 
@@ -1322,7 +1639,7 @@ class MainApp(tk.Tk):
 
     def auto_save(self):
         db_path = get_db_path(self.settings)
-        save_all(db_path, self.components, self.log_entries)
+        save_all_with_types(db_path, self.component_types, self.components, self.log_entries)
         self._status_var.set(f"Сохранено: {datetime.now().strftime('%H:%M:%S')}")
         self._db_path_label.config(text=db_path)
 
