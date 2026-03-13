@@ -279,15 +279,21 @@ def next_id(components: list) -> int:
 
 
 def component_label(item: dict) -> str:
-    """Читаемое название комплектующего для лога."""
-    parts = []
-    if item.get("тип"):
-        parts.append(str(item["тип"]))
-    if item.get("диаметр"):
-        parts.append(str(item["диаметр"]))
-    if item.get("длина"):
-        parts.append(f"x{item['длина']}")
-    return " ".join(parts) if parts else f"ID={item.get('id', '?')}"
+    """Создать полное описание комплектующего со всеми параметрами."""
+    type_name = item.get("тип", "")
+    params = item.get("доп_параметры", {})
+
+    # 🆕 Исключаем Количество и Комментарий из описания
+    excluded = ["Количество", "Комментарий"]
+    param_strs = []
+
+    for key, value in params.items():
+        if key not in excluded and value:  # Пропускаем пустые значения
+            param_strs.append(f"{key}: {value}")
+
+    if param_strs:
+        return f"{type_name} ({', '.join(param_strs)})"
+    return type_name
 
 
 def diff_items(old_item: dict, new_item: dict) -> str:
@@ -409,14 +415,27 @@ class ComponentDialog(tk.Toplevel):
                                                       sticky="ew", padx=5, pady=8)
         r += 1
 
-        # ПОЛЕ: КОЛИЧЕСТВО
+        # ПОЛЕ: КОЛИЧЕСТВО (только числовое)
         ttk.Label(form, text="Количество:", font=("", 9, "bold")).grid(
             row=r, column=0, columnspan=2, sticky="w", padx=5)
         r += 1
 
         self._qty_var = tk.StringVar()
-        ttk.Entry(form, textvariable=self._qty_var, width=30).grid(row=r, column=0, columnspan=2, sticky="ew", padx=5,
-                                                                   pady=4)
+        qty_entry = ttk.Entry(form, textvariable=self._qty_var, width=30)
+        qty_entry.grid(row=r, column=0, columnspan=2, sticky="ew", padx=5, pady=4)
+
+        # 🆕 Валидация - только числа
+        def validate_qty(value):
+            if value == "":
+                return True
+            try:
+                int(value)
+                return True
+            except ValueError:
+                return False
+
+        vcmd = (self.register(validate_qty), "%S")
+        qty_entry.config(validate="key", validatecommand=vcmd)
         r += 1
 
         # ПОЛЕ: КОММЕНТАРИЙ
@@ -1515,12 +1534,17 @@ class ComponentDetailsTab(ttk.Frame):
         self.app.components.append(new_item)
 
         # 🆕 Логируем ТОЛЬКО если количество > 0
-        qty = new_item.get("доп_параметры", {}).get("Количество", "")
-        if qty and qty != "0":
+        qty_str = new_item.get("доп_параметры", {}).get("Количество", "0")
+        try:
+            qty = int(qty_str) if qty_str else 0
+        except ValueError:
+            qty = 0
+
+        if qty > 0:
             self.app.add_log(
                 operation="Добавление",
                 component=component_label(new_item),
-                change=f"Добавлено: Количество {qty}",
+                change=f"Добавление: +{qty} Остаток: {qty}",
             )
 
         self.app.auto_save()
@@ -1547,14 +1571,29 @@ class ComponentDetailsTab(ttk.Frame):
             return
 
         # 🆕 Логируем ТОЛЬКО изменение количества
-        old_qty = old_item.get("доп_параметры", {}).get("Количество", "")
-        new_qty = dlg.result.get("доп_параметры", {}).get("Количество", "")
+        old_qty_str = old_item.get("доп_параметры", {}).get("Количество", "0")
+        new_qty_str = dlg.result.get("доп_параметры", {}).get("Количество", "0")
 
-        change_desc = "Без изменений"
+        try:
+            old_qty = int(old_qty_str) if old_qty_str else 0
+            new_qty = int(new_qty_str) if new_qty_str else 0
+        except ValueError:
+            old_qty = 0
+            new_qty = 0
+
         if old_qty != new_qty:
-            change_desc = f"Количество: {old_qty} → {new_qty}"
+            qty_change = new_qty - old_qty
+
+            # 🆕 Определяем Добавление или Уменьшение
+            if qty_change > 0:
+                operation_type = "Добавление"
+                change_desc = f"Добавление: +{qty_change} Остаток: {new_qty}"
+            else:
+                operation_type = "Уменьшение"
+                change_desc = f"Уменьшение: {qty_change} Остаток: {new_qty}"
+
             self.app.add_log(
-                operation="Изменение",
+                operation=operation_type,
                 component=component_label(item),
                 change=change_desc,
             )
