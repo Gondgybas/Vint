@@ -1649,6 +1649,7 @@ class LogTab(ttk.Frame):
         btn_bar.pack(fill="x", padx=6, pady=(6, 2))
         ttk.Button(btn_bar, text="🔄 Обновить", command=self.refresh).pack(side="left", padx=2)
         ttk.Button(btn_bar, text="❌ Сбросить фильтр", command=self._reset_filter).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="💬 Добавить комментарий", command=self._add_comment).pack(side="left", padx=2)
 
         tree_frame = ttk.Frame(self)
         tree_frame.pack(fill="both", expand=True, padx=6, pady=4)
@@ -1661,6 +1662,9 @@ class LogTab(ttk.Frame):
         vsb.pack(side="right", fill="y")
         hsb.pack(side="bottom", fill="x")
         self.tree.pack(side="left", fill="both", expand=True)
+
+        # 🆕 ДОБАВЛЯЕМ ОБРАБОТЧИК ДВОЙНОГО КЛИКА
+        self.tree.bind("<Double-1>", lambda e: self._add_comment())
 
         # Настройка столбцов с новой структурой
         widths = {
@@ -1702,23 +1706,27 @@ class LogTab(ttk.Frame):
             self._sort_col = col
             self._sort_asc = True
 
-        # 🆕 Сохраняем активные фильтры перед обновлением
+        # Сохраняем активные фильтры перед обновлением
         active_filters = self._filter.active_filters.copy() if self._filter else {}
 
         self.refresh()
 
-        # 🆕 Восстанавливаем фильтры после обновления
+        # Восстанавливаем фильтры после обновления
         if self._filter and active_filters:
             self._filter.active_filters = active_filters
-            self._filter.reapply_all_filters()
+            for col_id in active_filters:
+                cols = self.tree["columns"]
+                if col_id in cols:
+                    col_index = cols.index(col_id)
+                    self._filter.apply_filter(col_id, col_index)
 
     def refresh(self):
         """Обновить таблицу логов."""
-        # 🆕 Парсим даты для правильной сортировки
+        # Парсим даты для правильной сортировки
         entries = self.app.log_entries.copy()
 
         try:
-            if self._sort_col == "дата_време":
+            if self._sort_col == "дата_время":
                 entries = sorted(
                     entries,
                     key=lambda e: datetime.strptime(e.get(self._sort_col, ""), "%Y-%m-%d %H:%M:%S"),
@@ -1734,7 +1742,7 @@ class LogTab(ttk.Frame):
             print(f"❌ Ошибка сортировки: {ex}")
             entries = self.app.log_entries.copy()
 
-        # 🆕 Сохраняем активные фильтры ДО очистки таблицы
+        # Сохраняем активные фильтры ДО очистки таблицы
         active_filters = self._filter.active_filters.copy() if self._filter else {}
 
         # Очищаем таблицу
@@ -1750,10 +1758,9 @@ class LogTab(ttk.Frame):
                 self._filter._all_item_cache = set()
             self._filter._all_item_cache = set(self.tree.get_children(''))
 
-            # 🆕 Заново применяем сохраненные фильтры БЕЗ перестройки
+            # Заново применяем сохраненные фильтры БЕЗ перестройки
             if active_filters:
                 self._filter.active_filters = active_filters
-                # 🆕 Просто показываем/скрываем элементы без перестройки
                 items = set(self._filter._all_item_cache)
                 for col_id, filter_values in active_filters.items():
                     cols = self.tree["columns"]
@@ -1779,24 +1786,37 @@ class LogTab(ttk.Frame):
         self._status_var.set(f"Всего записей: {len(entries)}")
 
     def _add_comment(self):
+        """Добавить комментарий к записи лога."""
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo("Выбор", "Выберите запись лога для добавления комментария.")
+            messagebox.showinfo("Выбор", "Выберите запись для добавления комментария.")
             return
+
         row_values = self.tree.item(sel[0])["values"]
-        dt_val = row_values[0] if row_values else ""
+        if not row_values:
+            return
+
+        dt_val = row_values[0]  # Первая колонка - дата_время
 
         # Найти запись в логе по дате
         entry = next((e for e in self.app.log_entries if e.get("дата_время") == dt_val), None)
         if entry is None:
+            messagebox.showwarning("Ошибка", "Запись не найдена в логе.")
             return
 
-        comment = simpledialog.askstring("Комментарий", "Добавить комментарий:",
-                                         initialvalue=entry.get("комментарий", ""))
-        if comment is not None:
+        # Показать диалог для добавления комментария
+        current_comment = entry.get("комментарий", "")
+        comment = simpledialog.askstring(
+            "Комментарий",
+            f"Операция: {entry.get('операция')}\nКомплектующее: {entry.get('комплектующее')}\n\nДобавить/изменить комментарий:",
+            initialvalue=current_comment
+        )
+
+        if comment is not None:  # Если нажал ОК (не Отмена)
             entry["комментарий"] = comment
             self.app.auto_save()
             self.refresh()
+            messagebox.showinfo("✅ Готово", "Комментарий сохранён!")
 
 
 # ─────────────────────────────────────────────────────────────
